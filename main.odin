@@ -5,26 +5,57 @@ import gl "vendor:OpenGL"
 
 theme := Theme.Dark
 
+BORDER_V :: #force_inline proc() {
+    engine.ui_set_next_width(engine.ui_px(1, 1))
+    engine.ui_set_next_height(engine.ui_fill())
+    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[theme]))
+    engine.ui_set_next_flags({.DrawBackground})
+    engine.ui_row()
+}
+
+BORDER_H :: #force_inline proc() {
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_px(1, 1))
+    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[theme]))
+    engine.ui_set_next_flags({.DrawBackground})
+    engine.ui_row()
+}
+
+draw_topbar :: proc() {
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_px(65, 1))
+    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[theme]))
+    engine.ui_set_next_flags({.DrawBackground})
+    engine.ui_set_next_align_y(.Center)
+    engine.ui_row(); {
+        engine.ui_padding(32, {.Left, .Right}) 
+        engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_BODY)
+        engine.ui_text_sized("Moonladder", 14)
+    }
+}
+
 draw_sidebar :: proc() {
     engine.ui_set_next_width(engine.ui_px(350, 1))
     engine.ui_set_next_height(engine.ui_fill())
     engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[theme]))
     engine.ui_set_next_flags({.DrawBackground})
-    engine.ui_column()
-    engine.ui_padding(engine.ui_px(16, 1))
-
-    {
-        engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_column(); {
+        engine.ui_padding(16, {.Top, .Bottom})
         engine.ui_set_next_height(engine.ui_fill())
-        engine.ui_row()
-        {
+        engine.ui_row(); {
+            engine.ui_set_next_width(engine.ui_children_sum(1))
             engine.ui_column() // Vertical Tabs
+            engine.ui_padding(16, {.Left})
+            engine.ui_padding(12, {.Right})
             engine.ui_text("BTN")
         }
-        {engine.ui_set_next_width(engine.ui_px(1, 1)); engine.ui_set_next_height(engine.ui_fill()); engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[theme])); engine.ui_set_next_flags({.DrawBackground}); engine.ui_row()} // Border
+        BORDER_V()
         {
-            engine.ui_column() // Tab Content
-            engine.ui_text("Content")
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_fill())
+            engine.ui_column(); { // Tab Content
+                engine.ui_text("Content")
+            }
         }
     }
 }
@@ -72,17 +103,15 @@ main :: proc() {
             engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[theme]))
             defer engine.ui_pop_text_color()
 
-            {engine.ui_set_next_width(engine.ui_fill()); engine.ui_set_next_height(engine.ui_px(65, 1)); engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[theme])); engine.ui_set_next_flags({.DrawBackground}); engine.ui_set_next_align_y(.Center); engine.ui_row()
-                engine.ui_padding(engine.ui_px(32, 1)) 
-                engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_BODY)
-                engine.ui_text_sized("Moonladder", 14)
-            } // Top bar
-            {engine.ui_set_next_width(engine.ui_fill()); engine.ui_set_next_height(engine.ui_px(1, 1)); engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[theme])); engine.ui_set_next_flags({.DrawBackground}); engine.ui_row()} // Border
-            {engine.ui_set_next_width(engine.ui_fill()); engine.ui_set_next_height(engine.ui_fill()); engine.ui_row()
+            draw_topbar()
+            BORDER_H()
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_fill())
+            engine.ui_row(); {
                 draw_sidebar()
-                {engine.ui_set_next_width(engine.ui_px(1, 1)); engine.ui_set_next_height(engine.ui_percent(1, 1)); engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[theme])); engine.ui_set_next_flags({.DrawBackground}); engine.ui_column()} // Border
+                BORDER_V()
                 draw_main_area()
-            } // Remaining
+            }
         }
         engine.ui_end_build()
 
