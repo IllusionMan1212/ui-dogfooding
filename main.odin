@@ -387,7 +387,9 @@ State :: struct {
 
     curl_multi_handle: ^curl.CURLM,
 
+    // UI
     active_sidebar_tab: SidebarTab,
+    active_tab_index: int,
 }
 
 logger: log.Logger
@@ -995,7 +997,41 @@ draw_sidebar :: proc() {
 }
 
 draw_main_area :: proc() {
-    engine.ui_text("Main Area")
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_fill())
+    engine.ui_column(); {
+        {
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_row(); {
+                if draw_icon_button(.Plus, engine.color_hex_rgb(THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), 16, .TertiaryGrey, .Small) {
+                    // TODO: add new tab
+                }
+            }
+        }
+        BORDER_H()
+
+        // Empty state
+        if state.active_tab_index == -1 {
+            engine.ui_set_next_align_x(.Center)
+            engine.ui_set_next_align_y(.Center)
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_fill())
+            engine.ui_set_next_fixed_y(0)
+            engine.ui_column(); {
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_BACKGROUND_BRAND_DEFAULT[state.config.theme]))
+                engine.ui_set_next_fixed_height(0)
+                engine.ui_text_sized(ICONS[.EmptyState], 200)
+
+                // engine.ui_set_next_align_y(.End)
+                // engine.ui_set_next_fixed_y(100)
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
+                engine.ui_text_sized("Open a new request tab using Ctrl+T or by pressing the + button", THEME_FONT_SIZE_BODY_SM)
+            }
+        } else {
+            engine.ui_text("Main Area. Empty state and request area")
+        }
+    }
 }
 
 get_config_path :: proc(file: string, allocator := context.allocator) -> (string, bool) {
@@ -1354,6 +1390,37 @@ load_config_and_initialize_state :: proc() {
 
     if state.config.active_instance == nil {
         load_workspaces()
+    }
+
+    state.active_tab_index = -1
+}
+
+save_config :: proc() {
+    config_path, ok := get_config_path("config.json")
+    if !ok {
+        log.error("Failed to retrieve config path")
+        return
+    }
+    defer delete(config_path)
+
+    config_json, err := json.marshal(state.config)
+    defer delete(config_json)
+    if err != nil {
+        log.error("Failed to save config:", err)
+        return
+    }
+
+    file, open_err := os.open(config_path, {.Write, .Trunc, .Create}, os.Permissions_Read_All + {.Write_User})
+    defer os.close(file)
+    if open_err != nil {
+        log.error("Failed to save config:", open_err)
+        return
+    }
+
+    _, write_err := os.write(file, config_json)
+    if write_err != nil {
+        log.error("Failed to save config:", write_err)
+        return
     }
 }
 
@@ -2595,6 +2662,7 @@ main :: proc() {
                 if e.key.scancode == .T {
                     state.config.theme = state.config.theme == .Light ? .Dark : .Light
                     engine.set_clear_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+                    save_config()
                 }
             }
 
