@@ -5,11 +5,19 @@ Next on the list:-
         I want to try loading the tvgs in ladybird and seeing how they look. If they look the same then the converter sucks
         if not then my renderer sucks.
         Went with an icon font. This works best
-- [ ] We should probably somehow generate the whole ui_push_* ui_pop_* ui_set_next_* procedures as well as their nodes.
 - [ ] Ability to change cursor (e.g. Hovering button, disabled button, etc..)
+- [ ] Text truncation (ellipsizing)
+- [ ] Scrollable areas
+- [ ] Clipping?
+- [ ] Supporting different mouse clicks
+- [ ] Tooltips
+
+Misc:
+- [ ] We should probably somehow generate the whole ui_push_* ui_pop_* ui_set_next_* procedures as well as their nodes.
 
 Optimizations:-
 - [ ] Only rendering frames when something has visually changed
+    - This one is becoming needed more and more as more text is drawn.
 - [ ] Clipping/Scissoring
 - [ ] Culling stuff that's under dialogs/whatever
 - [ ] Texture atlas caching thing for images. Basically just prerender all used images in a single atlas texture

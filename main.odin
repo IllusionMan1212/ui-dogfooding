@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:os"
 import "core:log"
 import "core:strings"
+import "core:math"
 import "core:math/rand"
 import "core:io"
 import "core:mem"
@@ -56,6 +57,18 @@ http_method_strings := [?]string{"GET", "POST", "DELETE", "PATCH", "PUT", "HEAD"
 http_method_string :: proc(m: HttpMethod) -> string #no_bounds_check {
 	if m < .Get || m > .Trace { return "" }
 	return http_method_strings[m]
+}
+
+http_method_color :: #force_inline proc(m: HttpMethod) -> engine.Color {
+    #partial switch m {
+    case .Get:     return engine.color_hex_rgb(METHOD_GET)
+    case .Post:    return engine.color_hex_rgb(METHOD_POST)
+    case .Put:     return engine.color_hex_rgb(METHOD_PUT)
+    case .Patch:   return engine.color_hex_rgb(METHOD_PATCH)
+    case .Delete:  return engine.color_hex_rgb(METHOD_DELETE)
+    case .Head:    return engine.color_hex_rgb(METHOD_HEAD)
+    }
+    return engine.color_hex_rgb(THEME_TEXT_INFO_DEFAULT[state.config.theme])
 }
 
 BodyType :: enum {
@@ -238,6 +251,7 @@ Collection :: struct {
     last: ^Collection `json:"-"`,
     next: ^Collection `json:"-"`,
     prev: ^Collection `json:"-"`,
+    is_expanded: bool `json:"-"`,
 }
 
 EnvironmentVariableField :: struct {
@@ -733,35 +747,135 @@ draw_collections_list :: proc() {
     }
 }
 
-draw_collection_item :: proc(collection: ^Collection) {
-    // TODO:
+draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
     name := string(cstring(&collection.name[0]))
 
-    style := engine.ui_button_style(
-        0x00,
-        engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme]),
-        engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme]),
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]),
-        engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]),
-        engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]),
-        engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme]),
-        THEME_BORDER_RADIUS_MD,
-        0,
-        10,
-        6,
-    )
+    {
+        engine.ui_set_next_align_x(.Start)
+        engine.ui_set_next_align_y(.Center)
+        engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+        engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        box := engine.ui_row(engine.Id(collection.id)); sig := engine.ui_signal_from_box(box); {
+            if engine.ui_hovering(sig) {
+                box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme])
+            } else {
+                box.background_color = 0x00
+            }
 
-    engine.ui_set_next_width(engine.ui_fill())
-    engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_padding(6, {.Left})
+            engine.ui_padding(12, {.Right})
+            engine.ui_padding(4, {.Top, .Bottom})
+
+            if engine.ui_hovering(sig) {
+                engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_HOVER[state.config.theme]))
+            } else {
+                engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+            }
+
+            engine.ui_spacer(engine.ui_px(f32(20 * indent_level), 1))
+
+            // Chevron points down when expanded, right when collapsed
+            engine.ui_set_next_rotation(collection.is_expanded ? 0 : math.to_radians_f32(-90))
+            engine.ui_text_sized(ICONS[.Chevron], 12)
+
+            engine.ui_spacer(engine.ui_px(4, 1))
+
+            engine.ui_set_next_font_size(14)
+            // TODO: should be truncated with ellipsis if too long
+            engine.ui_text(name)
+
+            engine.ui_pop_text_color()
+
+            engine.ui_spacer(engine.ui_fill())
+
+            if engine.ui_hovering(sig) {
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                // TODO: should return signal or box so we can use it for hover and click
+                engine.ui_text_sized(ICONS[.LinkExternal], 16)
+
+                engine.ui_spacer(engine.ui_px(10, 1))
+
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                // TODO: should return signal or box so we can use it for hover and click
+                engine.ui_text_sized(ICONS[.Plus], 12)
+
+                engine.ui_spacer(engine.ui_px(10, 1))
+
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                // TODO: should return signal or box so we can use it for hover and click
+                engine.ui_text_sized(ICONS[.ThreeDots], 12)
+            }
+        }
+
+        if engine.ui_clicked(sig) {
+            collection.is_expanded = !collection.is_expanded
+        }
+    }
+
+    if collection.is_expanded {
+        for child := collection.first; child != nil; child = child.next {
+            draw_collection_item(child, indent_level + 1)
+        }
+        for &request in collection.requests {
+            draw_request_item(&request, indent_level + 1)
+        }
+    }
+}
+
+draw_request_item :: proc(request: ^Request, indent_level := 0) {
+    name := string(cstring(&request.name[0]))
+    method := http_method_string(request.method)
+
     engine.ui_set_next_align_x(.Start)
     engine.ui_set_next_align_y(.Center)
-    engine.ui_set_next_font_size(14)
-    _ = engine.ui_button_styled_with_icons(name, style, ICONS[.Chevron], id = cast(engine.Id)collection.id)
+    engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_children_sum(1))
+    box := engine.ui_row(engine.Id(request.id)); sig := engine.ui_signal_from_box(box); {
+        if engine.ui_hovering(sig) {
+            box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme])
+        } else {
+            box.background_color = 0x00
+        }
+
+        engine.ui_padding(6, {.Left})
+        engine.ui_padding(12, {.Right})
+        engine.ui_padding(4, {.Top, .Bottom})
+
+        engine.ui_spacer(engine.ui_px(f32(20 * indent_level), 1))
+
+        engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+        engine.ui_set_next_font_size(10)
+        engine.ui_set_next_text_color(http_method_color(request.method))
+        engine.ui_text(method)
+
+        engine.ui_spacer(engine.ui_px(6, 1))
+
+        if engine.ui_hovering(sig) {
+            engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_HOVER[state.config.theme]))
+        } else {
+            engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+        }
+        engine.ui_set_next_font_size(14)
+        // TODO: should be truncated with ellipsis if too long
+        engine.ui_text(name)
+        engine.ui_pop_text_color()
+
+        engine.ui_spacer(engine.ui_fill())
+
+        if engine.ui_hovering(sig) {
+            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+            // TODO: should return signal or box so we can use it for hover and click
+            engine.ui_text_sized(ICONS[.ThreeDots], 12)
+        }
+    }
+
+    if engine.ui_clicked(sig) {
+        fmt.println("TODO: open request with id", request.id)
+    }
 }
 
 draw_environments_list :: proc() {
@@ -786,8 +900,63 @@ draw_environments_list :: proc() {
             }
         }
 
-        for &environment in state.workspaces[state.active_workspace_index].environments {
-            engine.ui_text(string(cstring(&environment.name[0])))
+        engine.ui_spacer(engine.ui_px(12, 1))
+
+        if len(state.workspaces[state.active_workspace_index].environments) == 0 {
+            // TODO: draw empty state
+        }
+
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_fill())
+        engine.ui_column(); {
+            for &environment in state.workspaces[state.active_workspace_index].environments {
+                draw_environment_item(&environment)
+            }
+        }
+    }
+}
+
+draw_environment_item :: proc(environment: ^Environment) {
+    name := string(cstring(&environment.name[0]))
+
+    engine.ui_set_next_align_x(.Start)
+    engine.ui_set_next_align_y(.Center)
+    engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_children_sum(1))
+    box := engine.ui_row(engine.Id(environment.id)); {
+        sig := engine.ui_signal_from_box(box)
+        if engine.ui_hovering(sig) {
+            box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme])
+        } else {
+            box.background_color = 0x00
+        }
+
+        engine.ui_padding(6, {.Left})
+        engine.ui_padding(12, {.Right})
+        engine.ui_padding(4, {.Top, .Bottom})
+
+        if engine.ui_hovering(sig) {
+            engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_HOVER[state.config.theme]))
+        } else {
+            engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+        }
+
+        engine.ui_spacer(engine.ui_px(4, 1))
+
+        engine.ui_set_next_font_size(14)
+        // TODO: should be truncated with ellipsis if too long
+        engine.ui_text(name)
+
+        engine.ui_pop_text_color()
+
+        engine.ui_spacer(engine.ui_fill())
+
+        if engine.ui_hovering(sig) {
+            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+            // TODO: should return signal or box so we can use it for hover and click
+            engine.ui_text_sized(ICONS[.ThreeDots], 12)
         }
     }
 }
