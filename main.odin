@@ -996,19 +996,130 @@ draw_sidebar :: proc() {
     }
 }
 
+draw_tab_item_request :: proc(req: ^Request, index: int) {
+    // if state.active_tab_index == index {
+    //     engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+    //     engine.ui_set_next_flags({.DrawBackground})
+    // }
+
+    engine.ui_set_next_width(engine.ui_children_sum(1))
+    engine.ui_set_next_height(engine.ui_fill())
+    engine.ui_set_next_align_y(.Center)
+    engine.ui_set_next_flags({.MouseClickable, .DrawBackground})
+    tab_box := engine.ui_column(engine.Id(req.id)); {
+        tab_sig := engine.ui_signal_from_box(tab_box)
+        tab_hovered := engine.ui_hovering(tab_sig)
+
+        if state.active_tab_index == index {
+            tab_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme])
+        } else {
+            tab_box.background_color = 0x00
+        }
+
+        if engine.ui_clicked(tab_sig) {
+            state.active_tab_index = index
+        }
+
+        {
+            engine.ui_set_next_width(engine.ui_children_sum(1))
+            engine.ui_set_next_height(engine.ui_fill())
+            engine.ui_set_next_align_y(.Center)
+            engine.ui_row(); {
+                engine.ui_padding(12, {.Left, .Right})
+
+                name := string(cstring(&req.name[0]))
+
+                {
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_set_next_width(engine.ui_children_sum(1))
+                    engine.ui_set_next_align_y(.Center)
+                    engine.ui_row(); {
+                        engine.ui_set_next_font_size(10)
+                        engine.ui_set_next_font_weight(900)
+                        engine.ui_set_next_text_color(http_method_color(req.method))
+                        engine.ui_text(http_method_string(req.method))
+
+                        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+                        engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
+                        engine.ui_set_next_text_color(engine.color_hex_rgb(tab_hovered || state.active_tab_index == index ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                        engine.ui_text(name)
+                    }
+                }
+
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+                if tab_hovered {
+                    engine.ui_text(ICONS[.Close])
+                } else {
+                    engine.ui_spacer(engine.ui_px(16, 1))
+                }
+            }
+        }
+
+        // TODO: The border doesn't work because ui_fill just fills the entire tab bar, and ui_children_sum gives it 0 width
+        // I need a way to either get the width of the tab item, or be able to draw separate border sides.
+        {
+            engine.ui_set_next_width(engine.ui_children_sum(1))
+            engine.ui_set_next_height(engine.ui_px(1, 1))
+            engine.ui_set_next_background_color(engine.color_hex_rgb(state.active_tab_index == index ? THEME_BORDER_BRAND_DEFAULT : 0x00))
+            engine.ui_set_next_flags({.DrawBackground})
+            engine.ui_row()
+        }
+    }
+}
+
+draw_tab_bar :: proc() {
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_px(40, 1))
+    engine.ui_set_next_align_y(.Center)
+    engine.ui_row(); {
+        {
+            engine.ui_set_next_width(engine.ui_children_sum(1))
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_row(); {
+                for tab, index in state.tabs {
+                    switch t in tab {
+                    case ^Request:
+                        draw_tab_item_request(t, index)
+                    case ^Environment:
+                        // TODO:
+                    case ^Collection:
+                        // TODO:
+                    }
+                }
+            }
+        }
+
+        engine.ui_spacer(engine.ui_px(4, 1))
+        if draw_icon_button(.Plus, engine.color_hex_rgb(THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), 16, .TertiaryGrey, .Small) {
+            new_request_tab()
+            state.active_tab_index = len(state.tabs) - 1
+        }
+
+        engine.ui_spacer(engine.ui_fill())
+
+        engine.ui_spacer(engine.ui_px(4, 1))
+        {
+            engine.ui_set_next_width(engine.ui_px(1, 1))
+            engine.ui_set_next_height(engine.ui_fill())
+            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+            engine.ui_set_next_flags({.DrawBackground})
+            engine.ui_row()
+        }
+
+        if draw_button("No Environment", .TertiaryGrey, left_icon = .Environment, right_icon = .Chevron) {
+            // TODO: open environment popup
+        }
+    }
+}
+
 draw_main_area :: proc() {
     engine.ui_set_next_width(engine.ui_fill())
     engine.ui_set_next_height(engine.ui_fill())
     engine.ui_column(); {
-        {
-            engine.ui_set_next_width(engine.ui_fill())
-            engine.ui_set_next_height(engine.ui_children_sum(1))
-            engine.ui_row(); {
-                if draw_icon_button(.Plus, engine.color_hex_rgb(THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), 16, .TertiaryGrey, .Small) {
-                    // TODO: add new tab
-                }
-            }
-        }
+        draw_tab_bar()
+
         BORDER_H()
 
         // Empty state
@@ -1029,7 +1140,7 @@ draw_main_area :: proc() {
                 engine.ui_text_sized("Open a new request tab using Ctrl+T or by pressing the + button", THEME_FONT_SIZE_BODY_SM)
             }
         } else {
-            engine.ui_text("Main Area. Empty state and request area")
+            engine.ui_text("Main Area. request area")
         }
     }
 }
@@ -2497,6 +2608,56 @@ collection_unmarshaller :: proc(p: ^json.Parser, v: any) -> json.Unmarshal_Error
     return nil
 }
 
+new_request_tab :: proc() {
+    req := new(Request)
+    req.id = rand.int63()
+    req.active_options_tab = .Parameters
+    req.name[0] = 'U'
+    req.name[1] = 'n'
+    req.name[2] = 't'
+    req.name[3] = 'i'
+    req.name[4] = 't'
+    req.name[5] = 'l'
+    req.name[6] = 'e'
+    req.name[7] = 'd'
+    req.headers = make([dynamic]RequestHeader)
+
+    // Only init the text builder because the dyn arrays are inited on the first append
+    req.body.text = strings.builder_make_len_cap(0, 1024)
+
+    // NOTE: some sites return a 403 if we don't send a user-agent. Should probably also look into
+    // adding some other default headers (check postman and hoppscotch)
+    user_agent := RequestHeader{id = rand.int63()}
+    copy(user_agent.key[:], "User-Agent")
+    when RELEASE_BUILD {
+        copy(user_agent.value[:], "moonladder" + "/" + VERSION)
+    } else {
+        copy(user_agent.value[:], "moonladder" + "/" + "debug")
+    }
+
+    accept := RequestHeader{id = rand.int63()}
+    copy(accept.key[:], "Accept")
+    copy(accept.value[:], "*/*")
+
+    append(&req.headers, user_agent)
+    append(&req.headers, accept)
+    // TODO: requires that we set something in curl??
+    // req.headers["Connection"] = "keep-alive"
+    // TODO: requires that we can actually handle those compressions.
+    // req.headers["Accept-Encoding"] = "gzip, deflate, br"
+
+    // NOTE: make sure to always add whatever gets hashed BEFORE calculating and setting the hash.
+    req.modification_hash = hash_request(req)
+
+    append(&state.tabs, req)
+
+    // req.query_params_model = qt.qabstracttablemodel_create(req, table_qmeta, static_slot_callback, &query_params_model_callbacks)
+    // req.headers_model = qt.qabstracttablemodel_create(req, table_qmeta, static_slot_callback, &headers_model_callbacks)
+    // req.path_params_model = qt.qabstracttablemodel_create(req, table_qmeta, static_slot_callback, &path_params_model_callbacks)
+    // req.response_headers_model = qt.qabstracttablemodel_create(req, table_qmeta, static_slot_callback, &response_headers_model_callbacks)
+    // req.body_form_model = qt.qabstracttablemodel_create(req, table_qmeta, static_slot_callback, &form_fields_model_callbacks)
+}
+
 hash_request :: proc(request: ^Request) -> u128 {
     // TODO: we no longer use imgui
     // Only hash the bytes up to the null terminator since imgui optimizes ctrl+backspace
@@ -2656,14 +2817,14 @@ main :: proc() {
         e := engine.iter_events()
         for e != nil {
             #partial switch e.type {
-                case .WINDOW_CLOSED:
+            case .WINDOW_CLOSED:
                 engine.quit()
-                case .VIRT_KEY_PRESSED:
-                if e.key.scancode == .T {
-                    state.config.theme = state.config.theme == .Light ? .Dark : .Light
-                    engine.set_clear_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
-                    save_config()
-                }
+            case .VIRT_KEY_PRESSED:
+                // if e.key.scancode == .T {
+                //     state.config.theme = state.config.theme == .Light ? .Dark : .Light
+                //     engine.set_clear_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+                //     save_config()
+                // }
             }
 
             e = engine.iter_events()
