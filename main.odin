@@ -390,11 +390,20 @@ State :: struct {
     // UI
     active_sidebar_tab: SidebarTab,
     active_tab_index: int,
+    show_ui_debug_overlay: bool,
+    ui_debug_overlay_pos: [2]f32,
+    ui_debug_overlay_pos_initialized: bool,
+    ui_debug_overlay_drag_offset: [2]f32,
+    ui_debug_overlay_drag_start_mouse: [2]f32,
+    ui_debug_overlay_drag_start_pos: [2]f32,
 }
 
 logger: log.Logger
 state: State
 logo: engine.TextureId
+
+SCROLLBAR_V :: proc(scrollable: proc() -> ^engine.Box) {
+}
 
 BORDER_V :: #force_inline proc() {
     engine.ui_set_next_width(engine.ui_px(1, 1))
@@ -710,7 +719,7 @@ draw_collections_list :: proc() {
     engine.ui_set_next_width(engine.ui_fill())
     engine.ui_set_next_height(engine.ui_fill())
     engine.ui_column(); {
-        engine.ui_padding(12, {.Left, .Right})
+        engine.ui_padding(12, {.Left})
 
         {
             engine.ui_set_next_align_x(.End)
@@ -718,6 +727,7 @@ draw_collections_list :: proc() {
             engine.ui_set_next_width(engine.ui_fill())
             engine.ui_set_next_height(engine.ui_children_sum(1))
             engine.ui_row(); {
+                engine.ui_padding(12, {.Right})
                 if draw_button("New", .LinkColored, .Small, left_icon = .Plus) {
                     // TODO: new collection dialog
                 }
@@ -734,17 +744,36 @@ draw_collections_list :: proc() {
             // TODO: draw empty state
         }
 
-        // TODO: only draw the border when drag is accepted
-        // engine.ui_set_next_flags({.DrawBorder})
-        engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT))
-        engine.ui_set_next_border_thickness(1.5)
-        engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
         engine.ui_set_next_width(engine.ui_fill())
         engine.ui_set_next_height(engine.ui_fill())
-        engine.ui_column(); {
-            for collection in state.workspaces[state.active_workspace_index].collections {
-                draw_collection_item(collection)
+        engine.ui_row(); {
+            scroll_box: ^engine.Box
+            {
+                // TODO: only draw the border when drag is accepted
+                extra_flags := engine.Flags{/*.DrawBorder*/}
+
+                engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT))
+                engine.ui_set_next_border_thickness(1.5)
+                engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                engine.ui_set_next_width(engine.ui_fill())
+                engine.ui_set_next_height(engine.ui_fill())
+                scroll_box = engine.ui_scroll_column(extra_flags = extra_flags); {
+                    for collection in state.workspaces[state.active_workspace_index].collections {
+                        draw_collection_item(collection)
+                    }
+                }
             }
+
+            engine.ui_spacer(engine.ui_px(4, 1))
+
+            engine.ui_set_next_width(engine.ui_px(6, 1))
+            engine.ui_set_next_height(engine.ui_fill())
+            scrollbar := engine.ui_scrollbar_y_for(scroll_box)
+            scrollbar.background_color = {0,0,0,0}
+            scrollbar.border_color = engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme])
+            scrollbar.border_radius = THEME_BORDER_RADIUS_MD
+
+            engine.ui_spacer(engine.ui_px(2, 1))
         }
     }
 }
@@ -858,10 +887,22 @@ draw_request_item :: proc(request: ^Request, indent_level := 0) {
             engine.ui_set_next_height(engine.ui_children_sum(1))
             engine.ui_set_next_align_y(.Center)
             engine.ui_row(); {
-                engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
-                engine.ui_set_next_font_size(10)
-                engine.ui_set_next_text_color(http_method_color(request.method))
-                engine.ui_text(method)
+
+                {
+                    engine.ui_set_next_width(engine.ui_px(28, 1))
+                    engine.ui_set_next_max_width(28)
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_row(); {
+                        engine.ui_spacer(engine.ui_fill())
+
+                        engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+                        engine.ui_set_next_font_size(10)
+                        engine.ui_set_next_text_color(http_method_color(request.method))
+                        engine.ui_set_next_width(engine.ui_px(28, 1))
+                        engine.ui_set_next_max_width(28)
+                        engine.ui_text(method)
+                    }
+                }
 
                 engine.ui_spacer(engine.ui_px(6, 1))
 
@@ -885,7 +926,30 @@ draw_request_item :: proc(request: ^Request, indent_level := 0) {
     }
 
     if engine.ui_clicked(sig) {
-        fmt.println("TODO: open request with id", request.id)
+        for tab, i in state.tabs {
+            r, is_request := tab.(^Request)
+            if !is_request { continue }
+            if r.id == request.id {
+                state.active_tab_index = i
+                return
+            }
+        }
+
+        new_request_tab()
+
+        tab_req := state.tabs[len(state.tabs)-1].(^Request)
+
+        copy_request_data(tab_req, request)
+        tab_req.id = request.id
+
+        // Ensure url and query params are canonicalized when opening from collections.
+        // Some persisted requests may have query params stored separately while the url
+        // does not include them yet.
+        update_url_from_query_params(tab_req)
+        parse_path_params_from_url(tab_req)
+        tab_req.modification_hash = hash_request(tab_req)
+        tab_req.is_modified = false
+        state.active_tab_index = len(state.tabs)-1
     }
 }
 
@@ -1136,20 +1200,93 @@ draw_main_area :: proc() {
             engine.ui_set_next_align_y(.Center)
             engine.ui_set_next_width(engine.ui_fill())
             engine.ui_set_next_height(engine.ui_fill())
-            engine.ui_set_next_fixed_y(0)
             engine.ui_column(); {
                 engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_BACKGROUND_BRAND_DEFAULT[state.config.theme]))
                 engine.ui_set_next_fixed_height(0)
                 engine.ui_text_sized(ICONS[.EmptyState], 200)
 
-                // engine.ui_set_next_align_y(.End)
-                // engine.ui_set_next_fixed_y(100)
                 engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
                 engine.ui_text_sized("Open a new request tab using Ctrl+T or by pressing the + button", THEME_FONT_SIZE_BODY_SM)
             }
         } else {
-            engine.ui_text("Main Area. request area")
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_fill())
+            engine.ui_set_next_align_y(.Center)
+            engine.ui_set_next_align_x(.Center)
+            engine.ui_row(); {
+                engine.ui_text_sized("Main Area", 64)
+            }
         }
+    }
+}
+
+draw_ui_debug_overlay :: proc() {
+    if !state.show_ui_debug_overlay {
+        return
+    }
+
+    if !state.ui_debug_overlay_pos_initialized {
+        state.ui_debug_overlay_pos = {12, 12}
+        state.ui_debug_overlay_pos_initialized = true
+    }
+    
+    engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
+    defer engine.ui_pop_text_color()
+
+    stats := engine.ui_debug_get_frame_stats()
+
+    engine.ui_set_next_fixed_x(state.ui_debug_overlay_pos.x)
+    engine.ui_set_next_fixed_y(state.ui_debug_overlay_pos.y)
+    engine.ui_set_next_fixed_width(360)
+    engine.ui_set_next_height(engine.ui_children_sum(1))
+    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+    engine.ui_set_next_border_thickness(1)
+    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+    engine.ui_set_next_flags({.DrawBackground, .DrawBorder, .ClipToBounds, .OccludesBelow, .MouseClickable})
+    overlay := engine.ui_column(engine.Id(0x0D00B6A1)); {
+        sig := engine.ui_signal_from_box(overlay)
+
+        if engine.ui_pressed(sig) {
+            mouse_pos := engine.virt_mouse_pos()
+            state.ui_debug_overlay_drag_start_mouse = mouse_pos
+            // Use persisted overlay position; box.rect is not valid until ui_end_build layout.
+            state.ui_debug_overlay_drag_start_pos = state.ui_debug_overlay_pos
+
+            // Keep for compatibility while transitioning drag logic.
+            state.ui_debug_overlay_drag_offset.x = mouse_pos.x - state.ui_debug_overlay_pos.x
+            state.ui_debug_overlay_drag_offset.y = mouse_pos.y - state.ui_debug_overlay_pos.y
+        }
+
+        if engine.ui_dragging(sig) {
+            mouse_pos := engine.virt_mouse_pos()
+            mouse_delta := mouse_pos - state.ui_debug_overlay_drag_start_mouse
+            state.ui_debug_overlay_pos = state.ui_debug_overlay_drag_start_pos + mouse_delta
+
+            window_size := engine.get_window_size()
+            overlay_h := max(overlay.rect.max.y-overlay.rect.min.y, 24)
+            // Keep the overlay within the visible viewport while dragging.
+            state.ui_debug_overlay_pos.x = math.clamp(state.ui_debug_overlay_pos.x, 0, max(window_size.x-360, 0))
+            state.ui_debug_overlay_pos.y = math.clamp(state.ui_debug_overlay_pos.y, 0, max(window_size.y-overlay_h, 0))
+        }
+
+        engine.ui_padding(10)
+
+        engine.ui_set_next_font_size(13)
+        engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+        engine.ui_text("UI Debug Overlay (F3)")
+
+        engine.ui_spacer(engine.ui_px(6, 1))
+
+        engine.ui_set_next_font_size(12)
+        engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_BODY)
+        engine.ui_text(fmt.tprintf("Rect Draw Cmds: %d", stats.draw_cmd_count))
+        engine.ui_text(fmt.tprintf("Rect Instances: %d", stats.draw_instance_count))
+        engine.ui_text(fmt.tprintf("Text Cmds: %d", stats.text_cmd_count))
+        engine.ui_text(fmt.tprintf("Text Visible: %d", stats.text_cmd_visible_count))
+        engine.ui_text(fmt.tprintf("Text Culled: %d", stats.text_cmd_culled_count))
+        engine.ui_text(fmt.tprintf("Text Batches: %d", stats.text_batch_count))
+        engine.ui_text(fmt.tprintf("Occluded Skips: %d", stats.occluded_box_skip_count))
     }
 }
 
@@ -1543,6 +1680,85 @@ save_config :: proc() {
     }
 }
 
+// Assumes dst is initialized/valid but we want to overwrite its data with src data
+// It clears dst data before copying
+copy_request_data :: proc(dst: ^Request, src: ^Request) {
+    mem.zero_item(&dst.name)
+    copy(dst.name[:], src.name[:])
+    dst.method = src.method
+    mem.zero_item(&dst.url)
+    copy(dst.url[:], src.url[:])
+
+    delete(dst.query_params)
+    dst.query_params = make([dynamic]QueryParam, len(src.query_params))
+    copy(dst.query_params[:], src.query_params[:])
+
+    delete(dst.headers)
+    dst.headers = make([dynamic]RequestHeader, len(src.headers))
+    copy(dst.headers[:], src.headers[:])
+
+    for key, param in dst.path_params {
+        delete(param.indices)
+        delete(key)
+    }
+    delete(dst.path_params)
+    dst.path_params = make(map[string]PathParam)
+
+    for key, &value in src.path_params {
+        new_value := PathParam{}
+        copy(new_value.value[:], value.value[:])
+        new_value.indices = make([dynamic]PathParamIndex, len(value.indices))
+        copy(new_value.indices[:], value.indices[:])
+        dst.path_params[strings.clone(key)] = new_value
+    }
+
+    strings.builder_destroy(&dst.body.text)
+    for field in dst.body.structured {
+        for file_path in field.file_paths {
+            delete(file_path)
+        }
+        delete(field.file_paths)
+    }
+    delete(dst.body.structured)
+    delete(dst.body.binary_path)
+
+    dst.body.type = src.body.type
+
+    dst.body.text = strings.builder_make_len(strings.builder_len(src.body.text))
+    copy(dst.body.text.buf[:], src.body.text.buf[:])
+
+    dst.body.structured = make([dynamic]FormField, len(src.body.structured))
+    copy(dst.body.structured[:], src.body.structured[:])
+    for field, i in src.body.structured {
+        dst.body.structured[i].file_paths = make([dynamic]string, len(field.file_paths))
+        for file_path, j in field.file_paths {
+            dst.body.structured[i].file_paths[j] = strings.clone(file_path)
+        }
+    }
+
+    dst.body.binary_path = strings.clone(src.body.binary_path)
+
+    // Update auth
+    dst.auth.type = src.auth.type
+    mem.zero_item(&dst.auth.basic_username)
+    mem.zero_item(&dst.auth.basic_password)
+    mem.zero_item(&dst.auth.bearer_token)
+    mem.zero_item(&dst.auth.api_key_key)
+    mem.zero_item(&dst.auth.api_key_value)
+    copy(dst.auth.basic_username[:], src.auth.basic_username[:])
+    copy(dst.auth.basic_password[:], src.auth.basic_password[:])
+    copy(dst.auth.bearer_token[:], src.auth.bearer_token[:])
+    copy(dst.auth.api_key_key[:], src.auth.api_key_key[:])
+    copy(dst.auth.api_key_value[:], src.auth.api_key_value[:])
+    dst.auth.api_key_add_to = src.auth.api_key_add_to
+
+    dst.collection = src.collection
+    dst.modification_hash = src.modification_hash
+    dst.is_modified = false
+    dst.active_options_tab = src.active_options_tab
+    dst.active_response_tab = src.active_response_tab
+}
+
 destroy_request :: proc(request: ^Request) {
     strings.builder_destroy(&request.body.text)
     for &field in request.body.structured {
@@ -1629,6 +1845,106 @@ cleanup :: proc() {
     }
     delete(state.tabs)
     delete(state.workspaces)
+}
+
+update_url_from_query_params :: proc(request: ^Request) {
+    merged_url := strings.builder_make_len_cap(0, 8192)
+    defer strings.builder_destroy(&merged_url)
+    split_url := strings.split_n(string(cstring(&request.url[0])), "?", 2)
+    defer delete(split_url)
+    url_no_queries := split_url[0]
+    strings.write_string(&merged_url, url_no_queries)
+
+    if len(request.query_params) > 0 {
+        strings.write_byte(&merged_url, '?')
+    }
+    should_write_ampersand := false
+    for &param in request.query_params {
+        key := string(cstring(&param.key[0]))
+        if param.disabled || key == "" {
+            continue
+        }
+        if should_write_ampersand {
+            strings.write_byte(&merged_url, '&')
+        }
+
+        should_write_ampersand = true
+
+        strings.write_string(&merged_url, key)
+        val := string(cstring(&param.value[0]))
+        if val != "" {
+            strings.write_byte(&merged_url, '=')
+            strings.write_string(&merged_url, val)
+        }
+    }
+
+    mem.zero_item(&request.url)
+    copy(request.url[:], strings.to_string(merged_url))
+}
+
+is_path_param_char :: #force_inline proc "contextless" (b: u8) -> bool {
+    return (b >= 'a' && b <= 'z') ||
+           (b >= 'A' && b <= 'Z') ||
+           (b >= '0' && b <= '9') ||
+           b == '_' || b == '-'
+}
+
+parse_path_params_from_url :: proc(request: ^Request) {
+    old_path_params := request.path_params
+    new_path_params := make(map[string]PathParam)
+
+    url_copy := strings.clone_from_cstring(cstring(&request.url[0]))
+    defer delete(url_copy)
+    path_end := len(url_copy)
+    for i := 0; i < len(url_copy); i += 1 {
+        if url_copy[i] == '?' || url_copy[i] == '#' {
+            path_end = i
+            break
+        }
+    }
+
+    path := url_copy[:path_end]
+
+    for i := 0; i < len(path); i += 1 {
+        // Match /:param style placeholders
+        if path[i] == ':' && i > 0 && path[i-1] == '/' {
+            j := i + 1
+            for j < len(path) && is_path_param_char(path[j]) {
+                j += 1
+            }
+
+            if j > i + 1 {
+                key := path[i+1:j]
+                index := PathParamIndex{start = i, end = j}
+
+                if p, ok := new_path_params[key]; ok {
+                    append(&p.indices, index)
+                    new_path_params[key] = p
+                } else {
+                    p := PathParam{}
+                    p.indices = make([dynamic]PathParamIndex)
+                    append(&p.indices, index)
+
+                    if old, ok := old_path_params[key]; ok {
+                        copy(p.value[:], string(cstring(&old.value[0])))
+                    }
+
+                    new_path_params[strings.clone(key)] = p
+                }
+
+                i = j - 1
+                continue
+            }
+        }
+    }
+
+    for key, param in old_path_params {
+        delete(param.indices)
+        delete(key)
+    }
+    delete(old_path_params)
+
+    request.path_params = new_path_params
 }
 
 request_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) -> json.Marshal_Error {
@@ -2801,6 +3117,7 @@ main :: proc() {
     engine.init("", title, {1000, 600}, false)
     ensure(engine.ui_text_register_font("res/fonts/RedHatDisplay.ttf"))
     ensure(engine.ui_text_register_font("res/fonts/icons.ttf"))
+    ensure(engine.ui_text_register_font("/usr/share/fonts/truetype/Tajawal/Tajawal-Regular.ttf"))
     // assert(engine.ui_text_register_font("res/fonts/NotoSansCJK-Regular.ttc"))
     // assert(engine.ui_text_register_font("res/fonts/NotoSansEgyptianHieroglyphs-Regular.ttf"))
     // assert(engine.ui_text_register_font("res/fonts/NotoColorEmoji.ttf"))
@@ -2828,11 +3145,14 @@ main :: proc() {
             case .WINDOW_CLOSED:
                 engine.quit()
             case .VIRT_KEY_PRESSED:
-                // if e.key.scancode == .T {
-                //     state.config.theme = state.config.theme == .Light ? .Dark : .Light
-                //     engine.set_clear_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
-                //     save_config()
-                // }
+                if e.key.scancode == .F3 {
+                    state.show_ui_debug_overlay = !state.show_ui_debug_overlay
+                }
+                if e.key.scancode == .T {
+                    state.config.theme = state.config.theme == .Light ? .Dark : .Light
+                    engine.set_clear_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+                    save_config()
+                }
             }
 
             e = engine.iter_events()
@@ -2861,8 +3181,10 @@ main :: proc() {
                     BORDER_V()
                     draw_main_area()
                 }
+
             }
         }
+        draw_ui_debug_overlay()
         engine.ui_end_build()
 
         engine.ui_draw(engine.get_projection())
