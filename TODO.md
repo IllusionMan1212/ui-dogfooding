@@ -6,7 +6,7 @@ Next on the list:-
         if not then my renderer sucks.
         Went with an icon font. This works best
 - [ ] Ability to change cursor (e.g. Hovering button, disabled button, etc..)
-- [ ] Text truncation (ellipsizing)
+- [x] Text truncation (ellipsizing)
 - [ ] Scrollable areas
 - [ ] Clipping?
 - [ ] Supporting different mouse clicks
@@ -18,6 +18,7 @@ Misc:
 Optimizations:-
 - [ ] Only rendering frames when something has visually changed
     - This one is becoming needed more and more as more text is drawn.
+    - I think there's a different one where it divides the window to a grid and checks those for changes or something.
 - [ ] Clipping/Scissoring
 - [ ] Culling stuff that's under dialogs/whatever
 - [ ] Texture atlas caching thing for images. Basically just prerender all used images in a single atlas texture

@@ -778,21 +778,25 @@ draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
 
             engine.ui_spacer(engine.ui_px(f32(20 * indent_level), 1))
 
-            // Chevron points down when expanded, right when collapsed
-            engine.ui_set_next_rotation(collection.is_expanded ? 0 : math.to_radians_f32(-90))
-            engine.ui_text_sized(ICONS[.Chevron], 12)
+            {
+                engine.ui_set_next_width(engine.ui_fill())
+                engine.ui_set_next_height(engine.ui_children_sum(1))
+                engine.ui_set_next_align_y(.Center)
+                engine.ui_row(); {
+                    // Chevron points down when expanded, right when collapsed
+                    engine.ui_set_next_rotation(collection.is_expanded ? 0 : math.to_radians_f32(-90))
+                    engine.ui_text_sized(ICONS[.Chevron], 12)
 
-            engine.ui_spacer(engine.ui_px(4, 1))
+                    engine.ui_spacer(engine.ui_px(4, 1))
 
-            engine.ui_set_next_font_size(14)
-            // TODO: should be truncated with ellipsis if too long
-            engine.ui_text(name)
-
-            engine.ui_pop_text_color()
-
-            engine.ui_spacer(engine.ui_fill())
+                    engine.ui_set_next_font_size(14)
+                    engine.ui_text_shrinkable(name)
+                    engine.ui_pop_text_color()
+                }
+            }
 
             if engine.ui_hovering(sig) {
+                engine.ui_spacer(engine.ui_px(8, 1))
                 engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
                 // TODO: should return signal or box so we can use it for hover and click
                 engine.ui_text_sized(ICONS[.LinkExternal], 16)
@@ -849,26 +853,31 @@ draw_request_item :: proc(request: ^Request, indent_level := 0) {
 
         engine.ui_spacer(engine.ui_px(f32(20 * indent_level), 1))
 
-        engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
-        engine.ui_set_next_font_size(10)
-        engine.ui_set_next_text_color(http_method_color(request.method))
-        engine.ui_text(method)
+        {
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_align_y(.Center)
+            engine.ui_row(); {
+                engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+                engine.ui_set_next_font_size(10)
+                engine.ui_set_next_text_color(http_method_color(request.method))
+                engine.ui_text(method)
 
-        engine.ui_spacer(engine.ui_px(6, 1))
+                engine.ui_spacer(engine.ui_px(6, 1))
 
-        if engine.ui_hovering(sig) {
-            engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_HOVER[state.config.theme]))
-        } else {
-            engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                if engine.ui_hovering(sig) {
+                    engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_HOVER[state.config.theme]))
+                } else {
+                    engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                }
+                engine.ui_set_next_font_size(14)
+                engine.ui_text_shrinkable(name)
+                engine.ui_pop_text_color()
+            }
         }
-        engine.ui_set_next_font_size(14)
-        // TODO: should be truncated with ellipsis if too long
-        engine.ui_text(name)
-        engine.ui_pop_text_color()
-
-        engine.ui_spacer(engine.ui_fill())
 
         if engine.ui_hovering(sig) {
+            engine.ui_spacer(engine.ui_px(8, 1))
             engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
             // TODO: should return signal or box so we can use it for hover and click
             engine.ui_text_sized(ICONS[.ThreeDots], 12)
@@ -947,15 +956,19 @@ draw_environment_item :: proc(environment: ^Environment) {
 
         engine.ui_spacer(engine.ui_px(4, 1))
 
-        engine.ui_set_next_font_size(14)
-        // TODO: should be truncated with ellipsis if too long
-        engine.ui_text(name)
-
-        engine.ui_pop_text_color()
-
-        engine.ui_spacer(engine.ui_fill())
+        {
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_align_y(.Center)
+            engine.ui_row(); {
+                engine.ui_set_next_font_size(14)
+                engine.ui_text_shrinkable(name)
+                engine.ui_pop_text_color()
+            }
+        }
 
         if engine.ui_hovering(sig) {
+            engine.ui_spacer(engine.ui_px(8, 1))
             engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
             // TODO: should return signal or box so we can use it for hover and click
             engine.ui_text_sized(ICONS[.ThreeDots], 12)
@@ -997,11 +1010,6 @@ draw_sidebar :: proc() {
 }
 
 draw_tab_item_request :: proc(req: ^Request, index: int) {
-    // if state.active_tab_index == index {
-    //     engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
-    //     engine.ui_set_next_flags({.DrawBackground})
-    // }
-
     engine.ui_set_next_width(engine.ui_children_sum(1))
     engine.ui_set_next_height(engine.ui_fill())
     engine.ui_set_next_align_y(.Center)
