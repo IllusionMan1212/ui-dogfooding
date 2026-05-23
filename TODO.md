@@ -7,8 +7,8 @@ Next on the list:-
         Went with an icon font. This works best
 - [ ] Ability to change cursor (e.g. Hovering button, disabled button, etc..)
 - [x] Text truncation (ellipsizing)
-- [ ] Scrollable areas
-- [ ] Clipping?
+- [x] Scrollable areas
+- [x] Clipping?
 - [ ] Supporting different mouse clicks
 - [ ] Tooltips
 
@@ -16,10 +16,11 @@ Misc:
 - [ ] We should probably somehow generate the whole ui_push_* ui_pop_* ui_set_next_* procedures as well as their nodes.
 
 Optimizations:-
-- [ ] Only rendering frames when something has visually changed
+- [x] Only rendering frames when something has visually changed
     - This one is becoming needed more and more as more text is drawn.
     - I think there's a different one where it divides the window to a grid and checks those for changes or something.
-- [ ] Clipping/Scissoring
-- [ ] Culling stuff that's under dialogs/whatever
+    - Added engine-side render-on-change mode with an explicit toggle so apps can keep continuous rendering when needed (e.g. 3D scenes/animations).
+- [x] Clipping/Scissoring
+- [x] Culling stuff that's under dialogs/whatever
 - [ ] Texture atlas caching thing for images. Basically just prerender all used images in a single atlas texture
       so we can draw multiple images in one draw call.

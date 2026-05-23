@@ -3121,9 +3121,9 @@ main :: proc() {
     // assert(engine.ui_text_register_font("res/fonts/NotoSansCJK-Regular.ttc"))
     // assert(engine.ui_text_register_font("res/fonts/NotoSansEgyptianHieroglyphs-Regular.ttf"))
     // assert(engine.ui_text_register_font("res/fonts/NotoColorEmoji.ttf"))
-    engine.ui_text_set_default_pixel_size(20)
     engine.set_clear_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
     engine.set_msaa(.NONE)
+    engine.set_render_on_change(true)
 
     logo = engine.load_texture(#load("./res/icons/moonladder.png"), false, true)
 
@@ -3158,36 +3158,38 @@ main :: proc() {
             e = engine.iter_events()
         }
 
-        window_size := engine.get_window_size()
+        if engine.should_render_frame() {
+            window_size := engine.get_window_size()
 
-        engine.ui_begin_build(window_size)
-        engine.ui_text_set_default_pixel_size(16)
-        engine.ui_text_set_default_font_weight(THEME_FONT_WEIGHT_BODY)
-        {
-            engine.ui_set_next_width(engine.ui_fill())
-            engine.ui_set_next_height(engine.ui_fill())
-            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme]))
-            engine.ui_set_next_flags({.DrawBackground})
-            engine.ui_column(); {
-                engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
-                defer engine.ui_pop_text_color()
-
-                draw_topbar()
-                BORDER_H()
+            engine.ui_begin_build(window_size)
+            engine.ui_text_set_default_pixel_size(16)
+            engine.ui_text_set_default_font_weight(THEME_FONT_WEIGHT_BODY)
+            {
                 engine.ui_set_next_width(engine.ui_fill())
                 engine.ui_set_next_height(engine.ui_fill())
-                engine.ui_row(); {
-                    draw_sidebar()
-                    BORDER_V()
-                    draw_main_area()
+                engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme]))
+                engine.ui_set_next_flags({.DrawBackground})
+                engine.ui_column(); {
+                    engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
+                    defer engine.ui_pop_text_color()
+
+                    draw_topbar()
+                    BORDER_H()
+                    engine.ui_set_next_width(engine.ui_fill())
+                    engine.ui_set_next_height(engine.ui_fill())
+                    engine.ui_row(); {
+                        draw_sidebar()
+                        BORDER_V()
+                        draw_main_area()
+                    }
+
                 }
-
             }
-        }
-        draw_ui_debug_overlay()
-        engine.ui_end_build()
+            draw_ui_debug_overlay()
+            engine.ui_end_build()
 
-        engine.ui_draw(engine.get_projection())
+            engine.ui_draw(engine.get_projection())
+        }
 
         engine.frame_end()
     }
