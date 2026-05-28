@@ -369,9 +369,12 @@ Config :: struct {
     version: int `json:"cfg_version"`,
     instances: [dynamic]ServerInstance `json:"instances"`,
     active_instance: Maybe(ServerInstance) `json:"active_instance"`,
-    theme: Theme `json:"theme"`,
     timeout_ms: int `json:"timeout_ms"`,
     follow_redirects: bool `json:"follow_redirects"`,
+
+    theme: Theme `json:"theme"`,
+    sidebar_width: f32 `json:"sidebar_width"`,
+    sidebar_tab: SidebarTab `json:"sidebar_tab"`,
 }
 
 State :: struct {
@@ -388,7 +391,6 @@ State :: struct {
     curl_multi_handle: ^curl.CURLM,
 
     // UI
-    active_sidebar_tab: SidebarTab,
     active_tab_index: int,
     show_ui_debug_overlay: bool,
     ui_debug_overlay_pos: [2]f32,
@@ -840,10 +842,6 @@ draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
                         engine.ui_set_next_text_color(engine.color_hex_rgb(engine.ui_hovering(plus_sig) ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
                         engine.ui_text_sized(ICONS[.Plus], 12)
 
-                        if engine.ui_hovering(plus_sig) {
-                            fmt.println("hovering ?")
-                        }
-
                         if engine.ui_clicked(plus_sig) {
                             new_request_tab()
 
@@ -1102,7 +1100,7 @@ draw_environment_item :: proc(environment: ^Environment) {
 }
 
 draw_sidebar :: proc() {
-    engine.ui_set_next_width(engine.ui_px(350, 1))
+    engine.ui_set_next_width(engine.ui_px(state.config.sidebar_width, 1))
     engine.ui_set_next_height(engine.ui_fill())
     engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
     engine.ui_set_next_flags({.DrawBackground})
@@ -1115,17 +1113,19 @@ draw_sidebar :: proc() {
                 engine.ui_padding(16, {.Left})
                 engine.ui_padding(12, {.Right})
 
-                if draw_icon_button(.Folder, engine.color_hex_rgb(state.active_sidebar_tab == .Collections ? THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme] : THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .Small, variant = state.active_sidebar_tab == .Collections ? .Primary : .SecondaryGrey) {
-                    state.active_sidebar_tab = .Collections
+                if draw_icon_button(.Folder, engine.color_hex_rgb(state.config.sidebar_tab == .Collections ? THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme] : THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .Small, variant = state.config.sidebar_tab == .Collections ? .Primary : .SecondaryGrey) {
+                    state.config.sidebar_tab = .Collections
+                    save_config()
                 }
                 engine.ui_spacer(engine.ui_px(10, 1))
-                if draw_icon_button(.Environment, engine.color_hex_rgb(state.active_sidebar_tab == .Environments ? THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme] : THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .Small, variant = state.active_sidebar_tab == .Environments ? .Primary : .SecondaryGrey) {
-                    state.active_sidebar_tab = .Environments
+                if draw_icon_button(.Environment, engine.color_hex_rgb(state.config.sidebar_tab == .Environments ? THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme] : THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .Small, variant = state.config.sidebar_tab == .Environments ? .Primary : .SecondaryGrey) {
+                    state.config.sidebar_tab = .Environments
+                    save_config()
                 }
             }
         }
         BORDER_V()
-        switch state.active_sidebar_tab { // Content Area
+        switch state.config.sidebar_tab { // Content Area
         case .Collections:
             draw_collections_list()
         case .Environments:
@@ -1209,6 +1209,23 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
 }
 
 draw_tab_bar :: proc() {
+    window_size := engine.get_window_size()
+    sidebar_width := state.config.sidebar_width
+    border_width := f32(1)
+    tab_bar_width := window_size.x - sidebar_width - border_width
+
+    env_text_sz := engine.ui_text_measure_string("No Environment", 16)
+    env_icon_sz := engine.ui_text_measure_string(ICONS[.Environment], 16)
+    chevron_sz := engine.ui_text_measure_string(ICONS[.Chevron], 16)
+    env_button_w := env_text_sz.x + env_icon_sz.x + chevron_sz.x + 16*2 + 8 + 8
+
+    env_section_w := 4 + 1 + env_button_w
+
+    plus_sz := engine.ui_text_measure_string(ICONS[.Plus], 16)
+    plus_button_w := plus_sz.x + 10*2
+
+    available_width := max(tab_bar_width - plus_button_w - env_section_w - 4 - 2, 0)
+
     engine.ui_set_next_width(engine.ui_fill())
     engine.ui_set_next_height(engine.ui_px(40, 1))
     engine.ui_set_next_align_y(.Center)
@@ -1216,6 +1233,7 @@ draw_tab_bar :: proc() {
         {
             engine.ui_set_next_width(engine.ui_children_sum(1))
             engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_max_width(available_width)
             engine.ui_scroll_row(); {
                 for tab, index in state.tabs {
                     switch t in tab {
@@ -1715,6 +1733,7 @@ load_config_and_initialize_state :: proc() {
     }
 
     state.active_tab_index = -1
+    state.config.sidebar_width = math.max(state.config.sidebar_width, 350)
 }
 
 save_config :: proc() {
