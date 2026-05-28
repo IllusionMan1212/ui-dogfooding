@@ -715,7 +715,6 @@ draw_icon_button :: proc(
 }
 
 draw_collections_list :: proc() {
-
     engine.ui_set_next_width(engine.ui_fill())
     engine.ui_set_next_height(engine.ui_fill())
     engine.ui_column(); {
@@ -832,9 +831,54 @@ draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
 
                 engine.ui_spacer(engine.ui_px(10, 1))
 
-                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
-                // TODO: should return signal or box so we can use it for hover and click
-                engine.ui_text_sized(ICONS[.Plus], 12)
+                {
+                    engine.ui_set_next_width(engine.ui_children_sum(1))
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_set_next_flags({.MouseClickable})
+                    plus := engine.ui_row(engine.Id(collection.id) + 5); {
+                        plus_sig := engine.ui_signal_from_box(plus)
+                        engine.ui_set_next_text_color(engine.color_hex_rgb(engine.ui_hovering(plus_sig) ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                        engine.ui_text_sized(ICONS[.Plus], 12)
+
+                        if engine.ui_hovering(plus_sig) {
+                            fmt.println("hovering ?")
+                        }
+
+                        if engine.ui_clicked(plus_sig) {
+                            new_request_tab()
+
+                            request := state.tabs[len(state.tabs) - 1].(^Request)
+                            request.collection = collection
+
+                            collection_request := Request{}
+                            collection_request.id = request.id
+                            collection_request.method = request.method
+                            collection_request.modification_hash = request.modification_hash
+                            collection_request.collection = collection
+                            copy(collection_request.name[:], request.name[:])
+
+                            collection_request.query_params = make([dynamic]QueryParam, len(request.query_params))
+
+                            collection_request.headers = make([dynamic]RequestHeader, len(request.headers))
+                            copy(collection_request.headers[:], request.headers[:])
+
+                            collection_request.path_params = make(map[string]PathParam)
+                            for key, &value in request.path_params {
+                                new_value := PathParam{}
+                                copy(new_value.value[:], value.value[:])
+                                new_value.indices = make([dynamic]PathParamIndex, len(value.indices))
+                                copy(new_value.indices[:], value.indices[:])
+                                collection_request.path_params[strings.clone(key)] = new_value
+                            }
+
+                            append(&collection.requests, collection_request)
+                            state.active_tab_index = len(state.tabs) - 1
+                            collection.is_expanded = true
+
+                            save_workspaces()
+                        }
+                    }
+                }
 
                 engine.ui_spacer(engine.ui_px(10, 1))
 
@@ -850,11 +894,28 @@ draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
     }
 
     if collection.is_expanded {
-        for child := collection.first; child != nil; child = child.next {
-            draw_collection_item(child, indent_level + 1)
-        }
-        for &request in collection.requests {
-            draw_request_item(&request, indent_level + 1)
+        if collection.first == nil && len(collection.requests) == 0 {
+            engine.ui_set_next_height(engine.ui_px(60, 1))
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_row(); {
+                engine.ui_spacer(engine.ui_px(f32(indent_level) * 20 + 11, 1))
+                BORDER_V()
+                engine.ui_set_next_height(engine.ui_fill())
+                engine.ui_set_next_width(engine.ui_fill())
+                engine.ui_set_next_align_y(.Center)
+                engine.ui_set_next_align_x(.Center)
+                engine.ui_row(); {
+                    engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                    engine.ui_text("Collection is empty")
+                }
+            }
+        } else {
+            for child := collection.first; child != nil; child = child.next {
+                draw_collection_item(child, indent_level + 1)
+            }
+            for &request in collection.requests {
+                draw_request_item(&request, indent_level + 1)
+            }
         }
     }
 }
@@ -1113,9 +1174,15 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
 
                         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
 
+                        if engine.ui_text_measure_string(name).x < 80 {
+                            engine.ui_push_pref_width(engine.ui_text_dim(0, 1))
+                        } else {
+                            engine.ui_push_pref_width(engine.ui_px(80, 1))
+                        }
                         engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
                         engine.ui_set_next_text_color(engine.color_hex_rgb(tab_hovered || state.active_tab_index == index ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
                         engine.ui_text(name)
+                        engine.ui_pop_pref_width()
                     }
                 }
 
@@ -1149,7 +1216,7 @@ draw_tab_bar :: proc() {
         {
             engine.ui_set_next_width(engine.ui_children_sum(1))
             engine.ui_set_next_height(engine.ui_children_sum(1))
-            engine.ui_row(); {
+            engine.ui_scroll_row(); {
                 for tab, index in state.tabs {
                     switch t in tab {
                     case ^Request:
@@ -1171,17 +1238,16 @@ draw_tab_bar :: proc() {
 
         engine.ui_spacer(engine.ui_fill())
 
-        engine.ui_spacer(engine.ui_px(4, 1))
         {
-            engine.ui_set_next_width(engine.ui_px(1, 1))
-            engine.ui_set_next_height(engine.ui_fill())
-            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
-            engine.ui_set_next_flags({.DrawBackground})
-            engine.ui_row()
-        }
-
-        if draw_button("No Environment", .TertiaryGrey, left_icon = .Environment, right_icon = .Chevron) {
-            // TODO: open environment popup
+            engine.ui_set_next_width(engine.ui_children_sum(1))
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_row(); {
+                engine.ui_spacer(engine.ui_px(4, 1))
+                BORDER_V()
+                if draw_button("No Environment", .TertiaryGrey, left_icon = .Environment, right_icon = .Chevron) {
+                    // TODO: open environment popup
+                }
+            }
         }
     }
 }
@@ -2974,12 +3040,6 @@ new_request_tab :: proc() {
     req.modification_hash = hash_request(req)
 
     append(&state.tabs, req)
-
-    // req.query_params_model = qt.qabstracttablemodel_create(req, table_qmeta, static_slot_callback, &query_params_model_callbacks)
-    // req.headers_model = qt.qabstracttablemodel_create(req, table_qmeta, static_slot_callback, &headers_model_callbacks)
-    // req.path_params_model = qt.qabstracttablemodel_create(req, table_qmeta, static_slot_callback, &path_params_model_callbacks)
-    // req.response_headers_model = qt.qabstracttablemodel_create(req, table_qmeta, static_slot_callback, &response_headers_model_callbacks)
-    // req.body_form_model = qt.qabstracttablemodel_create(req, table_qmeta, static_slot_callback, &form_fields_model_callbacks)
 }
 
 hash_request :: proc(request: ^Request) -> u128 {
@@ -3149,9 +3209,24 @@ main :: proc() {
                     state.show_ui_debug_overlay = !state.show_ui_debug_overlay
                 }
                 if e.key.scancode == .T {
-                    state.config.theme = state.config.theme == .Light ? .Dark : .Light
-                    engine.set_clear_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
-                    save_config()
+                    if .LEFT_CTRL in e.key.mods || .RIGHT_CTRL in e.key.mods {
+                        new_request_tab()
+                        state.active_tab_index = len(state.tabs) - 1
+                    } else {
+                        state.config.theme = state.config.theme == .Light ? .Dark : .Light
+                        engine.set_clear_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+                        save_config()
+                    }
+                }
+                if e.key.scancode == .W {
+                    if .LEFT_CTRL in e.key.mods || .RIGHT_CTRL in e.key.mods {
+                        if len(state.tabs) > 0 {
+                            ordered_remove(&state.tabs, state.active_tab_index)
+                            if state.active_tab_index >= len(state.tabs) {
+                                state.active_tab_index = len(state.tabs) - 1
+                            }
+                        }
+                    }
                 }
             }
 
