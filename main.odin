@@ -1138,26 +1138,28 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
     engine.ui_set_next_width(engine.ui_children_sum(1))
     engine.ui_set_next_height(engine.ui_fill())
     engine.ui_set_next_align_y(.Center)
-    engine.ui_set_next_flags({.MouseClickable, .DrawBackground})
-    tab_box := engine.ui_column(engine.Id(req.id)); {
-        tab_sig := engine.ui_signal_from_box(tab_box)
-        tab_hovered := engine.ui_hovering(tab_sig)
-
+    engine.ui_set_next_flags({.DrawBackground})
+    tab_box := engine.ui_column(); {
         if state.active_tab_index == index {
             tab_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme])
         } else {
             tab_box.background_color = 0x00
         }
 
-        if engine.ui_clicked(tab_sig) {
-            state.active_tab_index = index
-        }
-
+        tab_hovered: bool
         {
             engine.ui_set_next_width(engine.ui_children_sum(1))
             engine.ui_set_next_height(engine.ui_fill())
             engine.ui_set_next_align_y(.Center)
-            engine.ui_row(); {
+            engine.ui_set_next_flags({.MouseClickable})
+            tab_box := engine.ui_row(engine.Id(req.id)); {
+                tab_sig := engine.ui_signal_from_box(tab_box)
+                tab_hovered = engine.ui_hovering(tab_sig)
+
+                if engine.ui_clicked(tab_sig) {
+                    state.active_tab_index = index
+                }
+
                 engine.ui_padding(12, {.Left, .Right})
 
                 name := string(cstring(&req.name[0]))
@@ -1186,22 +1188,65 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
                     }
                 }
 
-                engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
 
                 if tab_hovered {
-                    engine.ui_text(ICONS[.Close])
+                    engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+                } else {
+                    engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+                }
+
+                if tab_hovered {
+                    engine.ui_set_next_width(engine.ui_children_sum(1))
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_set_next_align_y(.Center)
+                    engine.ui_set_next_align_x(.Center)
+                    engine.ui_set_next_flags({.MouseClickable, .DrawBackground})
+                    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                    engine.ui_set_next_background_color(0x00)
+                    box := engine.ui_row(engine.Id(req.id) + 5); {
+                        sig := engine.ui_signal_from_box(box)
+
+                        engine.ui_padding(4, {.Left, .Right, .Top, .Bottom})
+
+                        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                        text_box := engine.ui_text(ICONS[.Close])
+                        if engine.ui_hovering(sig) {
+                            text_box.text_color = engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme])
+                            box.background_color = engine.color_hex_rgb(state.active_tab_index == index ? THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme] : THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+                        }
+
+                        if engine.ui_clicked(sig) {
+                            log.debug("TODO: close tab at index", index)
+                        }
+                    }
                 } else {
                     engine.ui_spacer(engine.ui_px(16, 1))
                 }
             }
         }
 
-        // TODO: The border doesn't work because ui_fill just fills the entire tab bar, and ui_children_sum gives it 0 width
-        // I need a way to either get the width of the tab item, or be able to draw separate border sides.
         {
-            engine.ui_set_next_width(engine.ui_children_sum(1))
+            method_str := http_method_string(req.method)
+            method_w := engine.ui_text_measure_string(method_str, 10, 900).x
+            name := string(cstring(&req.name[0]))
+            name_raw_w := engine.ui_text_measure_string(name, THEME_FONT_SIZE_BODY_SM).x
+            name_w := min(name_raw_w, f32(80))
+            close_icon_w := engine.ui_text_measure_string(ICONS[.Close], 14).x
+
+            item_w := f32(12)
+            item_w += method_w + f32(THEME_SPACING_MD) + name_w
+            if tab_hovered {
+                item_w += f32(THEME_SPACING_SM)
+                item_w += 4 + close_icon_w + 4 + 3
+            } else {
+                item_w += f32(THEME_SPACING_MD)
+                item_w += 16 + 1
+            }
+            item_w += 12
+
+            engine.ui_set_next_width(engine.ui_px(item_w, 1))
             engine.ui_set_next_height(engine.ui_px(1, 1))
-            engine.ui_set_next_background_color(engine.color_hex_rgb(state.active_tab_index == index ? THEME_BORDER_BRAND_DEFAULT : 0x00))
+            engine.ui_set_next_background_color(state.active_tab_index == index ? engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT) : 0x00)
             engine.ui_set_next_flags({.DrawBackground})
             engine.ui_row()
         }
@@ -3273,7 +3318,13 @@ main :: proc() {
                     engine.ui_set_next_height(engine.ui_fill())
                     engine.ui_row(); {
                         draw_sidebar()
-                        BORDER_V()
+                        split_interactive, split_visual := engine.ui_split_divider(.Y, &state.config.sidebar_width, 350, 600, hit_thickness = 7)
+                        sig := engine.ui_signal_from_box(split_interactive)
+                        if engine.ui_hovering(sig) || engine.ui_dragging(sig) {
+                            split_visual.background_color = engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT)
+                        } else {
+                            split_visual.background_color = engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme])
+                        }
                         draw_main_area()
                     }
 
