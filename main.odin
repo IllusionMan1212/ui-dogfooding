@@ -25,6 +25,8 @@ RELEASE_BUILD :: #config(RELEASE_BUILD, false)
 VERSION :: #config(VERSION, "")
 GIT_SHA :: #config(GIT_SHA, "debug")
 
+TRANSPARENT :: 0x00000000
+
 WorkspacesSchemaVersion :: enum int {
     V0 = 0,
     V1 = 1,
@@ -239,6 +241,7 @@ Request :: struct {
     // Ephemeral UI state for this open request tab.
     active_options_tab: RequestOptionsTab `json:"-"`, // 8
     active_response_tab: RequestResponseTab `json:"-"`, // 8
+    height: f32,
 }
 
 Collection :: struct {
@@ -404,7 +407,13 @@ logger: log.Logger
 state: State
 logo: engine.TextureId
 
-SCROLLBAR_V :: proc(scrollable: proc() -> ^engine.Box) {
+SCROLLBAR_V :: proc(scroll_box: ^engine.Box) {
+    engine.ui_set_next_width(engine.ui_px(6, 1))
+    engine.ui_set_next_height(engine.ui_fill())
+    scrollbar := engine.ui_scrollbar_y_for(scroll_box)
+    scrollbar.background_color = {0,0,0,0}
+    scrollbar.border_color = engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme])
+    scrollbar.border_radius = THEME_BORDER_RADIUS_MD
 }
 
 BORDER_V :: #force_inline proc() {
@@ -479,7 +488,7 @@ draw_button :: proc(
             engine.color_hex_rgb(THEME_BACKGROUND_BRAND_SOLID),
             engine.color_hex_rgb(THEME_BACKGROUND_BRAND_SOLID_HOVER[state.config.theme]),
             engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DISABLED[state.config.theme]),
-            0x00,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_SECONDARY_INVERSE[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_SECONDARY_INVERSE[state.config.theme]),
@@ -506,41 +515,41 @@ draw_button :: proc(
             engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme]),
         },
         .TertiaryGrey = {
-            0x00,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]),
-            0x00,
-            0x00,
-            0x00,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme]),
         },
         .TertiaryColored = {
-            0x00,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme]),
-            0x00,
-            0x00,
-            0x00,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme]),
         },
         .LinkGrey = {
-            0x00,
-            0x00,
-            0x00,
-            0x00,
-            0x00,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_SECONDARY_HOVER[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme]),
         },
         .LinkColored = {
-            0x00,
-            0x00,
-            0x00,
-            0x00,
-            0x00,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_BRAND_HOVER[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_SECONDARY_DISABLED),
@@ -617,7 +626,7 @@ draw_icon_button :: proc(
             engine.color_hex_rgb(THEME_BACKGROUND_BRAND_SOLID),
             engine.color_hex_rgb(THEME_BACKGROUND_BRAND_SOLID_HOVER[state.config.theme]),
             engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DISABLED[state.config.theme]),
-            0x00,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_SECONDARY_INVERSE[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_SECONDARY_INVERSE[state.config.theme]),
@@ -644,41 +653,41 @@ draw_icon_button :: proc(
             engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme]),
         },
         .TertiaryGrey = {
-            0x00,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]),
-            0x00,
-            0x00,
-            0x00,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme]),
         },
         .TertiaryColored = {
-            0x00,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme]),
-            0x00,
-            0x00,
-            0x00,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme]),
         },
         .LinkGrey = {
-            0x00,
-            0x00,
-            0x00,
-            0x00,
-            0x00,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_SECONDARY_HOVER[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme]),
         },
         .LinkColored = {
-            0x00,
-            0x00,
-            0x00,
-            0x00,
-            0x00,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
+            TRANSPARENT,
             engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_BRAND_HOVER[state.config.theme]),
             engine.color_hex_rgb(THEME_TEXT_SECONDARY_DISABLED),
@@ -766,14 +775,7 @@ draw_collections_list :: proc() {
             }
 
             engine.ui_spacer(engine.ui_px(4, 1))
-
-            engine.ui_set_next_width(engine.ui_px(6, 1))
-            engine.ui_set_next_height(engine.ui_fill())
-            scrollbar := engine.ui_scrollbar_y_for(scroll_box)
-            scrollbar.background_color = {0,0,0,0}
-            scrollbar.border_color = engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme])
-            scrollbar.border_radius = THEME_BORDER_RADIUS_MD
-
+            SCROLLBAR_V(scroll_box)
             engine.ui_spacer(engine.ui_px(2, 1))
         }
     }
@@ -793,7 +795,7 @@ draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
             if engine.ui_hovering(sig) {
                 box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme])
             } else {
-                box.background_color = 0x00
+                box.background_color = TRANSPARENT
             }
 
             engine.ui_padding(6, {.Left})
@@ -932,7 +934,7 @@ draw_request_item :: proc(request: ^Request, indent_level := 0) {
         if engine.ui_hovering(sig) {
             box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme])
         } else {
-            box.background_color = 0x00
+            box.background_color = TRANSPARENT
         }
 
         engine.ui_padding(6, {.Left})
@@ -1064,7 +1066,7 @@ draw_environment_item :: proc(environment: ^Environment) {
         if engine.ui_hovering(sig) {
             box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme])
         } else {
-            box.background_color = 0x00
+            box.background_color = TRANSPARENT
         }
 
         engine.ui_padding(6, {.Left})
@@ -1143,7 +1145,7 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
         if state.active_tab_index == index {
             tab_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme])
         } else {
-            tab_box.background_color = 0x00
+            tab_box.background_color = TRANSPARENT
         }
 
         tab_hovered: bool
@@ -1202,7 +1204,7 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
                     engine.ui_set_next_align_x(.Center)
                     engine.ui_set_next_flags({.MouseClickable, .DrawBackground})
                     engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
-                    engine.ui_set_next_background_color(0x00)
+                    engine.ui_set_next_background_color(TRANSPARENT)
                     box := engine.ui_row(engine.Id(req.id) + 5); {
                         sig := engine.ui_signal_from_box(box)
 
@@ -1246,7 +1248,7 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
 
             engine.ui_set_next_width(engine.ui_px(item_w, 1))
             engine.ui_set_next_height(engine.ui_px(1, 1))
-            engine.ui_set_next_background_color(state.active_tab_index == index ? engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT) : 0x00)
+            engine.ui_set_next_background_color(state.active_tab_index == index ? engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT) : TRANSPARENT)
             engine.ui_set_next_flags({.DrawBackground})
             engine.ui_row()
         }
@@ -1338,12 +1340,94 @@ draw_main_area :: proc() {
                 engine.ui_text_sized("Open a new request tab using Ctrl+T or by pressing the + button", THEME_FONT_SIZE_BODY_SM)
             }
         } else {
+            switch tab in state.tabs[state.active_tab_index] {
+            case ^Request:
+                draw_request_main_area(tab)
+            case ^Collection:
+                // draw_collection_main_area(tab)
+            case ^Environment:
+                // draw_environment_main_area(tab)
+            }
+        }
+    }
+}
+
+draw_request_main_area :: proc(tab: ^Request) {
+    available_height := engine.get_window_size().y - 40 - 1 - 65
+    tab.height = tab.height == 0 ? f32(available_height / 2) : tab.height
+
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_fill())
+    engine.ui_column(); {
+        { // Request Area
             engine.ui_set_next_width(engine.ui_fill())
-            engine.ui_set_next_height(engine.ui_fill())
-            engine.ui_set_next_align_y(.Center)
-            engine.ui_set_next_align_x(.Center)
+            engine.ui_set_next_height(engine.ui_px(tab.height, 1))
+            // TODO: test
+                            engine.ui_set_next_flags({.DrawBackground})
             engine.ui_row(); {
-                engine.ui_text_sized("Main Area", 64)
+                scroll_box: ^engine.Box
+                {
+                    engine.ui_set_next_width(engine.ui_fill())
+                    engine.ui_set_next_height(engine.ui_fill())
+                    scroll_box = engine.ui_scroll_column(); {
+                        // engine.ui_padding(24, {.Left, .Right, .Top, .Bottom})
+                        {
+                            engine.ui_set_next_width(engine.ui_fill())
+                            engine.ui_set_next_height(engine.ui_px(40, 1))
+                            // engine.ui_set_next_flags({.DrawBackground})
+                            engine.ui_row()
+                        }
+                    }
+                }
+
+                engine.ui_spacer(engine.ui_px(4, 1))
+                SCROLLBAR_V(scroll_box)
+                engine.ui_spacer(engine.ui_px(2, 1))
+            }
+        }
+        engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+        interactive, visual := engine.ui_split_divider(.X, &tab.height, 1, available_height)
+        sig := engine.ui_signal_from_box(interactive)
+        if engine.ui_hovering(sig) || engine.ui_dragging(sig) {
+            visual.background_color = engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT)
+        }
+
+        { // Response Area
+            #partial switch tab.status {
+            case .Initial:
+                engine.ui_set_next_width(engine.ui_fill())
+                engine.ui_set_next_height(engine.ui_fill())
+                engine.ui_set_next_align_x(.Center)
+                engine.ui_set_next_align_y(.Center)
+                engine.ui_column(); {
+                    {
+                        engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+                        engine.ui_set_next_width(engine.ui_px(56, 1))
+                        engine.ui_set_next_height(engine.ui_px(56, 1))
+                        engine.ui_set_next_align_x(.Center)
+                        engine.ui_set_next_align_y(.Center)
+                        engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                        engine.ui_set_next_border_thickness(0.5)
+                        engine.ui_set_next_border_radius(9999)
+                        engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
+            engine.ui_row(); {
+                engine.ui_set_next_font_size(18)
+                engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+                engine.ui_text("{}")
+            }
+                    }
+
+                    engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+                    engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+                    engine.ui_text_sized("Response", THEME_FONT_SIZE_BODY_MD)
+
+                    engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+                    engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                    engine.ui_text_sized("Send a request to get a response", THEME_FONT_SIZE_BODY_SM)
+                }
             }
         }
     }
