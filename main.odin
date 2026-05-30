@@ -1,5 +1,6 @@
 package main
 
+import "core:hash"
 import "base:runtime"
 import "core:fmt"
 import "core:os"
@@ -25,6 +26,8 @@ RELEASE_BUILD :: #config(RELEASE_BUILD, false)
 VERSION :: #config(VERSION, "")
 GIT_SHA :: #config(GIT_SHA, "debug")
 
+TOPBAR_HEIGHT :: 64
+TABBAR_HEIGHT :: 40
 TRANSPARENT :: 0x00000000
 
 WorkspacesSchemaVersion :: enum int {
@@ -434,7 +437,7 @@ BORDER_H :: #force_inline proc() {
 
 draw_topbar :: proc() {
     engine.ui_set_next_width(engine.ui_fill())
-    engine.ui_set_next_height(engine.ui_px(64, 1))
+    engine.ui_set_next_height(engine.ui_px(TOPBAR_HEIGHT, 1))
     engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
     engine.ui_set_next_flags({.DrawBackground})
     engine.ui_set_next_align_y(.Center)
@@ -1352,8 +1355,55 @@ draw_main_area :: proc() {
     }
 }
 
+draw_checkbox :: proc(checked: ^bool, label: string) {
+    engine.ui_set_next_width(engine.ui_children_sum(1))
+    engine.ui_set_next_height(engine.ui_children_sum(1))
+    engine.ui_set_next_align_y(.Center)
+    engine.ui_row(); {
+        {
+            {
+                engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+                engine.ui_set_next_width(engine.ui_px(20, 1))
+                engine.ui_set_next_height(engine.ui_px(20, 1))
+                engine.ui_set_next_border_thickness(0.5)
+                engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_SM)
+                engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
+                engine.ui_row(); {
+                }
+            }
+            engine.ui_spacer(engine.ui_px(10, 1))
+            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+            engine.ui_text_sized(label, THEME_FONT_SIZE_BODY_SM)
+        }
+    }
+}
+
+draw_request_parameters_tab :: proc(req: ^Request) {
+    engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+    engine.ui_text_sized("Query Parameters", THEME_FONT_SIZE_BODY_SM)
+    draw_checkbox(&req.is_modified, "Bulk edit")
+    // square, _, _, _ := engine.ui_checkbox(&req.is_modified, check_mark = ICONS[.Check])
+
+    // square.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme])
+}
+
+draw_request_body_tab :: proc() {
+    // TODO:
+}
+
+draw_request_authorization_tab :: proc() {
+    engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+    engine.ui_text_sized("Authorization", THEME_FONT_SIZE_BODY_SM)
+}
+
+draw_request_headers_tab :: proc() {
+    engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+    engine.ui_text_sized("Headers", THEME_FONT_SIZE_BODY_SM)
+}
+
 draw_request_main_area :: proc(tab: ^Request) {
-    available_height := engine.get_window_size().y - 40 - 1 - 65
+    available_height := engine.get_window_size().y - TABBAR_HEIGHT - TOPBAR_HEIGHT - 1
     tab.height = tab.height == 0 ? f32(available_height / 2) : tab.height
 
     engine.ui_set_next_width(engine.ui_fill())
@@ -1362,20 +1412,101 @@ draw_request_main_area :: proc(tab: ^Request) {
         { // Request Area
             engine.ui_set_next_width(engine.ui_fill())
             engine.ui_set_next_height(engine.ui_px(tab.height, 1))
-            // TODO: test
-                            engine.ui_set_next_flags({.DrawBackground})
             engine.ui_row(); {
                 scroll_box: ^engine.Box
                 {
                     engine.ui_set_next_width(engine.ui_fill())
                     engine.ui_set_next_height(engine.ui_fill())
                     scroll_box = engine.ui_scroll_column(); {
-                        // engine.ui_padding(24, {.Left, .Right, .Top, .Bottom})
+                        engine.ui_padding(24, {.Left, .Top, .Bottom})
+                        engine.ui_padding(12, {.Right})
                         {
                             engine.ui_set_next_width(engine.ui_fill())
-                            engine.ui_set_next_height(engine.ui_px(40, 1))
-                            // engine.ui_set_next_flags({.DrawBackground})
-                            engine.ui_row()
+                            engine.ui_set_next_height(engine.ui_children_sum(1))
+                            engine.ui_set_next_align_y(.Center)
+                            engine.ui_row(); {
+                                {
+                                    engine.ui_set_next_width(engine.ui_fill())
+                                    engine.ui_set_next_height(engine.ui_px(40, 1))
+                                    engine.ui_set_next_flags({.DrawBackground})
+                                    engine.ui_row()
+                                }
+                                engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+                                if draw_button("Send", enabled = false) {
+                                    // TODO: send request
+                                }
+                                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+                                if draw_icon_button(.Code, icon_size = 24, variant = .SecondaryGrey, size = .Small) {
+                                    // TODO: show curl code dialog
+                                }
+                            }
+                        }
+
+                        engine.ui_spacer(engine.ui_px(10, 1))
+
+                        {
+                            engine.ui_set_next_width(engine.ui_fill())
+                            engine.ui_set_next_height(engine.ui_children_sum(1))
+                            engine.ui_column(); {
+                                {
+                                    engine.ui_set_next_width(engine.ui_fill())
+                                    engine.ui_set_next_height(engine.ui_px(40, 1))
+                                    engine.ui_row(); {
+                                        for option in reflect.enum_field_names(RequestOptionsTab) {
+                                            id := hash.fnv32a(transmute([]byte)engine.ui_hash_part_from_key_string(option))
+
+                                            engine.ui_set_next_width(engine.ui_children_sum(1))
+                                            engine.ui_set_next_height(engine.ui_children_sum(1))
+                                            engine.ui_column(); {
+                                                option_is_active := reflect.enum_string(tab.active_options_tab) == option
+                                                {
+                                                    engine.ui_set_next_width(engine.ui_children_sum(1))
+                                                    engine.ui_set_next_height(engine.ui_px(39, 1))
+                                                    engine.ui_set_next_align_x(.Center)
+                                                    engine.ui_set_next_align_y(.Center)
+                                                    engine.ui_set_next_flags({.MouseClickable})
+                                                    box := engine.ui_row(id); {
+                                                        sig := engine.ui_signal_from_box(box)
+
+                                                        engine.ui_padding(12, {.Left, .Right})
+                                                        engine.ui_set_next_text_color(engine.color_hex_rgb(engine.ui_hovering(sig) || option_is_active ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                                                        engine.ui_text_sized(option, THEME_FONT_SIZE_BODY_SM)
+
+                                                        if engine.ui_clicked(sig) {
+                                                            e, ok := reflect.enum_from_name(RequestOptionsTab, option)
+                                                            assert(ok, "Failed to retrieve enum value from enum name for RequestOptionsTab")
+                                                            tab.active_options_tab = e
+                                                        }
+                                                    }
+                                                }
+
+                                                if option_is_active {
+                                                    text_size := engine.ui_text_measure_string(option, THEME_FONT_SIZE_BODY_SM)
+                                                    engine.ui_set_next_width(engine.ui_px(text_size.x + 12 * 2, 1))
+                                                    engine.ui_set_next_height(engine.ui_px(1, 1))
+                                                    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT))
+                                                    engine.ui_set_next_flags({.DrawBackground})
+                                                    engine.ui_row()
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                BORDER_H()
+                            }
+                        }
+
+                        engine.ui_spacer(engine.ui_px(10, 1))
+
+                        switch tab.active_options_tab {
+                        case .Parameters:
+                            draw_request_parameters_tab(tab)
+                        case .Body:
+                            draw_request_body_tab()
+                        case .Authorization:
+                            draw_request_authorization_tab()
+                        case .Headers:
+                            draw_request_headers_tab()
                         }
                     }
                 }
