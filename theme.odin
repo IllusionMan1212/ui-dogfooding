@@ -223,7 +223,10 @@ THEME_ICON_TERTIARY_DEFAULT := [Theme]u32{
     .Dark = 0xA4A7AE,
 }
 
-THEME_ICON_BRAND_DEFAULT :: 0x1E8678
+THEME_ICON_BRAND_DEFAULT := [Theme]u32{
+    .Light = 0x1E8678,
+    .Dark = 0x16BAA4,
+}
 
 THEME_ICON_BRAND_HOVER := [Theme]u32{
     .Light = 0x1A7569,

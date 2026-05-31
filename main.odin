@@ -58,10 +58,16 @@ HttpMethod :: enum {
 }
 
 http_method_strings := [?]string{"GET", "POST", "DELETE", "PATCH", "PUT", "HEAD", "CONNECT", "OPTIONS", "TRACE"}
+body_type_strings := [?]string{"None", "Text", "JSON", "HTML", "XML", "multipart/form-data", "x-www-form-urlencoded", "File"}
 
 http_method_string :: proc(m: HttpMethod) -> string #no_bounds_check {
 	if m < .Get || m > .Trace { return "" }
 	return http_method_strings[m]
+}
+
+body_type_string :: proc(b: BodyType) -> string #no_bounds_check {
+    if b < .None || b > .File { return "" }
+    return body_type_strings[b]
 }
 
 http_method_color :: #force_inline proc(m: HttpMethod) -> engine.Color {
@@ -234,17 +240,12 @@ Request :: struct {
     status: RequestStatus `json:"-"`, // 8
     response: Response `json:"-"`, // 232
 
-    // Qt-specific
-    // query_params_model: ^qt.QAbstractTableModel `json:"-"`, // 8
-    // headers_model: ^qt.QAbstractTableModel `json:"-"`, // 8
-    // path_params_model: ^qt.QAbstractTableModel `json:"-"`, // 8
-    // response_headers_model: ^qt.QAbstractTableModel `json:"-"`, // 8
-    // body_form_model: ^qt.QAbstractTableModel `json:"-"`, // 8
-
     // Ephemeral UI state for this open request tab.
     active_options_tab: RequestOptionsTab `json:"-"`, // 8
     active_response_tab: RequestResponseTab `json:"-"`, // 8
-    height: f32,
+    query_params_bulk_edit: bool `json:"-"`,
+    headers_bulk_edit: bool `json:"-"`,
+    height: f32 `json:"-"`,
 }
 
 Collection :: struct {
@@ -301,6 +302,11 @@ ButtonSize :: enum {
 IconButtonSize :: enum {
     ExtraSmall,
     Small,
+    Medium,
+    Large,
+}
+
+TextInputSize :: enum {
     Medium,
     Large,
 }
@@ -1359,59 +1365,257 @@ draw_checkbox :: proc(checked: ^bool, label: string) {
     engine.ui_set_next_width(engine.ui_children_sum(1))
     engine.ui_set_next_height(engine.ui_children_sum(1))
     engine.ui_set_next_align_y(.Center)
-    engine.ui_row(); {
+    engine.ui_set_next_flags({.MouseClickable})
+    box := engine.ui_row(); {
+        sig := engine.ui_signal_from_box(box)
         {
             {
-                engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+                if checked^ {
+                    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_BRAND_DEFAULT[state.config.theme]))
+                } else {
+                    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+                }
                 engine.ui_set_next_width(engine.ui_px(20, 1))
                 engine.ui_set_next_height(engine.ui_px(20, 1))
                 engine.ui_set_next_border_thickness(0.5)
-                engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                if checked^ {
+                    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT))
+                } else {
+                    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                }
                 engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_SM)
+                engine.ui_set_next_align_x(.Center)
+                engine.ui_set_next_align_y(.Center)
                 engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
                 engine.ui_row(); {
+                    if checked^ {
+                        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_ICON_BRAND_DEFAULT[state.config.theme]))
+                        engine.ui_text(ICONS[.Check])
+                    }
                 }
             }
             engine.ui_spacer(engine.ui_px(10, 1))
             engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
             engine.ui_text_sized(label, THEME_FONT_SIZE_BODY_SM)
         }
+
+        if engine.ui_clicked(sig) {
+            checked^ = !checked^
+        }
+    }
+}
+
+@require_results
+// label is used to generate a unique id for the radio button.
+draw_radio_button :: proc(label: string, selected: bool) -> bool {
+    SIZE :: 16
+
+    display_str := engine.ui_display_part_from_key_string(label)
+    id_seed := hash.fnv32a(transmute([]byte)engine.ui_hash_part_from_key_string(label))
+
+    engine.ui_set_next_width(engine.ui_children_sum(1))
+    engine.ui_set_next_height(engine.ui_children_sum(1))
+    engine.ui_set_next_align_y(.Center)
+    engine.ui_set_next_flags({.MouseClickable})
+    box := engine.ui_row(id_seed); {
+        {
+            {
+                if selected {
+                    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT))
+                } else {
+                    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+                }
+                engine.ui_set_next_width(engine.ui_px(SIZE, 1))
+                engine.ui_set_next_height(engine.ui_px(SIZE, 1))
+                engine.ui_set_next_border_thickness(selected ? 4 : 0.5)
+                if selected {
+                    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BACKGROUND_BRAND_DEFAULT[state.config.theme]))
+                } else {
+                    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                }
+                engine.ui_set_next_border_radius(100)
+                engine.ui_set_next_align_x(.Center)
+                engine.ui_set_next_align_y(.Center)
+                engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
+                engine.ui_row(); {
+                    if selected {
+                        engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_ICON_BRAND_DEFAULT[state.config.theme]))
+                        engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_ICON_BRAND_DEFAULT[state.config.theme]))
+                        engine.ui_set_next_width(engine.ui_px(10, 1))
+                        engine.ui_set_next_height(engine.ui_px(10, 1))
+                        engine.ui_set_next_border_radius(100)
+                        engine.ui_row(); {
+                            // inner circle
+                        }
+                    }
+                }
+            }
+            engine.ui_spacer(engine.ui_px(6, 1))
+            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+            engine.ui_text_sized(display_str, THEME_FONT_SIZE_BODY_SM)
+        }
+    }
+
+    sig := engine.ui_signal_from_box(box)
+    return engine.ui_clicked(sig)
+}
+
+draw_url_text_input :: proc(req: ^Request) {
+    HEIGHT :: 44
+
+    engine.ui_set_next_height(engine.ui_px(HEIGHT, 1))
+    engine.ui_set_next_align_y(.Center)
+    engine.ui_set_next_flags({.MouseClickable, .DrawBorder, .DrawBackground})
+    engine.ui_set_next_border_thickness(0.5)
+    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+    text_input_box := engine.ui_row(); {
+        engine.ui_padding(8, {.Top, .Bottom})
+        engine.ui_padding(10, {.Right, .Left})
+
+        {
+            engine.ui_set_next_height(engine.ui_fill())
+            engine.ui_set_next_width(engine.ui_children_sum(1))
+            engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+            engine.ui_set_next_align_y(.Center)
+            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+            method_selector := engine.ui_row(); {
+                engine.ui_padding(8, {.Left, .Right})
+                engine.ui_padding(4, {.Top, .Bottom})
+                engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+                engine.ui_set_next_font_size(THEME_FONT_SIZE_LABEL)
+                engine.ui_set_next_text_color(http_method_color(req.method))
+                engine.ui_text(http_method_string(req.method))
+                engine.ui_spacer(engine.ui_px(16, 1))
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                engine.ui_text(ICONS[.Chevron])
+            }
+            method_selector_sig := engine.ui_signal_from_box(method_selector)
+            if engine.ui_clicked(method_selector_sig) {
+                log.debug("TODO: Method selector clicked")
+            }
+            method_selector.background_color = engine.ui_hovering(method_selector_sig) ? engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme]) : 0x00
+        }
+        engine.ui_spacer(engine.ui_px(6, 1))
+        { // Divider
+            engine.ui_set_next_width(engine.ui_px(1, 1))
+            engine.ui_set_next_height(engine.ui_px(24, 1))
+            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+            engine.ui_set_next_flags({.DrawBackground})
+            engine.ui_row()
+        }
+
+        engine.ui_spacer(engine.ui_px(10, 1))
+
+        {
+            if cstring(&req.url[0]) == "" {
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme]))
+                engine.ui_text_sized("Enter URL or paste text", THEME_FONT_SIZE_BODY_SM)
+            } else {
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
+                engine.ui_text_sized(string(cstring(&req.url[0])), THEME_FONT_SIZE_BODY_SM)
+            }
+        }
+    }
+
+    text_input_box_sig := engine.ui_signal_from_box(text_input_box)
+    if engine.ui_clicked(text_input_box_sig) {
+        log.debug("TODO: Text input box clicked")
     }
 }
 
 draw_request_parameters_tab :: proc(req: ^Request) {
     engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
     engine.ui_text_sized("Query Parameters", THEME_FONT_SIZE_BODY_SM)
-    draw_checkbox(&req.is_modified, "Bulk edit")
-    // square, _, _, _ := engine.ui_checkbox(&req.is_modified, check_mark = ICONS[.Check])
+    engine.ui_spacer(engine.ui_px(10, 1))
+    draw_checkbox(&req.query_params_bulk_edit, "Bulk edit")
+    if req.query_params_bulk_edit {
+        // TODO: if bulk edit, show textarea with key=value pairs
+    } else {
+        // TODO: query params table
+    }
+    engine.ui_spacer(engine.ui_px(10, 1))
+    if draw_button("Add New", .LinkColored, .Small, left_icon = .Plus) {
+        // TODO:
+    }
 
-    // square.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme])
+    if len(req.path_params) > 0 {
+        engine.ui_spacer(engine.ui_px(10, 1))
+        BORDER_H()
+        engine.ui_spacer(engine.ui_px(10, 1))
+        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+        engine.ui_text_sized("Path Parameters", THEME_FONT_SIZE_BODY_SM)
+    }
 }
 
-draw_request_body_tab :: proc() {
-    // TODO:
+draw_request_body_tab :: proc(req: ^Request) {
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_column(); {
+        {
+            engine.ui_row(); {
+                for type, i in BodyType {
+                    if i > 0 {
+                        engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+                    }
+
+                    if draw_radio_button(body_type_string(type), req.body.type == type) {
+                        req.body.type = type
+                    }
+                }
+            }
+        }
+
+        engine.ui_spacer(engine.ui_px(10, 1))
+
+        // TODO:
+        switch req.body.type {
+        case .None:
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_align_x(.Center)
+            engine.ui_row(); {
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                engine.ui_text_sized("No body will be sent with the request.", THEME_FONT_SIZE_LABEL)
+            }
+        case .Text:
+        case .JSON:
+        case .HTML:
+        case .XML:
+        case .Form:
+        case .X_WWW_Form_Urlencoded:
+        case .File:
+        }
+    }
 }
 
-draw_request_authorization_tab :: proc() {
+draw_request_authorization_tab :: proc(req: ^Request) {
     engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
     engine.ui_text_sized("Authorization", THEME_FONT_SIZE_BODY_SM)
 }
 
-draw_request_headers_tab :: proc() {
+draw_request_headers_tab :: proc(req: ^Request) {
     engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
     engine.ui_text_sized("Headers", THEME_FONT_SIZE_BODY_SM)
+    engine.ui_spacer(engine.ui_px(10, 1))
+    draw_checkbox(&req.headers_bulk_edit, "Bulk edit")
+    // TODO: query params table
+    // TODO: if bulk edit, show textarea with key=value pairs
+    engine.ui_spacer(engine.ui_px(10, 1))
+    if draw_button("Add New", .LinkColored, .Small, left_icon = .Plus) {
+        // TODO:
+    }
 }
 
-draw_request_main_area :: proc(tab: ^Request) {
+draw_request_main_area :: proc(req: ^Request) {
     available_height := engine.get_window_size().y - TABBAR_HEIGHT - TOPBAR_HEIGHT - 1
-    tab.height = tab.height == 0 ? f32(available_height / 2) : tab.height
+    req.height = req.height == 0 ? f32(available_height / 2) : req.height
 
     engine.ui_set_next_width(engine.ui_fill())
     engine.ui_set_next_height(engine.ui_fill())
     engine.ui_column(); {
         { // Request Area
             engine.ui_set_next_width(engine.ui_fill())
-            engine.ui_set_next_height(engine.ui_px(tab.height, 1))
+            engine.ui_set_next_height(engine.ui_px(req.height, 1))
             engine.ui_row(); {
                 scroll_box: ^engine.Box
                 {
@@ -1425,12 +1629,14 @@ draw_request_main_area :: proc(tab: ^Request) {
                             engine.ui_set_next_height(engine.ui_children_sum(1))
                             engine.ui_set_next_align_y(.Center)
                             engine.ui_row(); {
-                                {
-                                    engine.ui_set_next_width(engine.ui_fill())
-                                    engine.ui_set_next_height(engine.ui_px(40, 1))
-                                    engine.ui_set_next_flags({.DrawBackground})
-                                    engine.ui_row()
-                                }
+                                // { // Method and URL Input
+                                //     engine.ui_set_next_width(engine.ui_fill())
+                                //     engine.ui_set_next_height(engine.ui_px(40, 1))
+                                //     engine.ui_set_next_flags({.DrawBackground})
+                                //     engine.ui_row()
+                                // }
+                                engine.ui_set_next_width(engine.ui_fill())
+                                draw_url_text_input(req)
                                 engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
                                 if draw_button("Send", enabled = false) {
                                     // TODO: send request
@@ -1458,7 +1664,7 @@ draw_request_main_area :: proc(tab: ^Request) {
                                             engine.ui_set_next_width(engine.ui_children_sum(1))
                                             engine.ui_set_next_height(engine.ui_children_sum(1))
                                             engine.ui_column(); {
-                                                option_is_active := reflect.enum_string(tab.active_options_tab) == option
+                                                option_is_active := reflect.enum_string(req.active_options_tab) == option
                                                 {
                                                     engine.ui_set_next_width(engine.ui_children_sum(1))
                                                     engine.ui_set_next_height(engine.ui_px(39, 1))
@@ -1475,7 +1681,7 @@ draw_request_main_area :: proc(tab: ^Request) {
                                                         if engine.ui_clicked(sig) {
                                                             e, ok := reflect.enum_from_name(RequestOptionsTab, option)
                                                             assert(ok, "Failed to retrieve enum value from enum name for RequestOptionsTab")
-                                                            tab.active_options_tab = e
+                                                            req.active_options_tab = e
                                                         }
                                                     }
                                                 }
@@ -1498,15 +1704,15 @@ draw_request_main_area :: proc(tab: ^Request) {
 
                         engine.ui_spacer(engine.ui_px(10, 1))
 
-                        switch tab.active_options_tab {
+                        switch req.active_options_tab {
                         case .Parameters:
-                            draw_request_parameters_tab(tab)
+                            draw_request_parameters_tab(req)
                         case .Body:
-                            draw_request_body_tab()
+                            draw_request_body_tab(req)
                         case .Authorization:
-                            draw_request_authorization_tab()
+                            draw_request_authorization_tab(req)
                         case .Headers:
-                            draw_request_headers_tab()
+                            draw_request_headers_tab(req)
                         }
                     }
                 }
@@ -1517,14 +1723,14 @@ draw_request_main_area :: proc(tab: ^Request) {
             }
         }
         engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
-        interactive, visual := engine.ui_split_divider(.X, &tab.height, 1, available_height)
+        interactive, visual := engine.ui_split_divider(.X, &req.height, 1, available_height)
         sig := engine.ui_signal_from_box(interactive)
         if engine.ui_hovering(sig) || engine.ui_dragging(sig) {
             visual.background_color = engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT)
         }
 
         { // Response Area
-            #partial switch tab.status {
+            #partial switch req.status {
             case .Initial:
                 engine.ui_set_next_width(engine.ui_fill())
                 engine.ui_set_next_height(engine.ui_fill())

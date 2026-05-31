@@ -11,6 +11,7 @@ Next on the list:-
 - [x] Clipping?
 - [ ] Supporting different mouse clicks
 - [ ] Tooltips
+- [ ] BUG: Cursor changing for the split only works if we have one split in the entire app
 
 Misc:
 - [ ] We should probably somehow generate the whole ui_push_* ui_pop_* ui_set_next_* procedures as well as their nodes.
