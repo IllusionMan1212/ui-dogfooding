@@ -11,7 +11,23 @@ Next on the list:-
 - [x] Clipping?
 - [ ] Supporting different mouse clicks
 - [ ] Tooltips
-- [ ] BUG: Cursor changing for the split only works if we have one split in the entire app
+- [x] BUG: Cursor changing for the split only works if we have one split in the entire app
+- [ ] We need to be able to support changing the language even if XSetLocaleModifiers doesn't work
+
+- [ ] Text input
+    - [x] When moving the mouse, sometimes the blinking of the caret takes longer (This is something to do with how we handle events I bet)
+    - [-] When window loses focus we should unfocus the text input (or at the very least stop wasting cpu blinking the caret)
+        - Literally doesn't matter for now
+    - [x] Caret should be customizable?
+    - [x] Selection color should be customizable
+    - [x] Placeholder color should be customizable
+    - [x] Double click to select word is broken, only selects texts before caret position.
+        - [x] It also doesn't stop word selection at standard places all other text editors support.
+    - [x] Caret should have a white-ish color
+    - [ ] Ctrl + left/right arrows should move by word bound, just like double click selection
+    - [ ] Double click to select word + hold should select words instead of individual letters
+    - [ ] Triple clicking should select whole line
+    - [ ] Triple click to select line + hold should select whole lines instead of individual letters or words
 
 Misc:
 - [ ] We should probably somehow generate the whole ui_push_* ui_pop_* ui_set_next_* procedures as well as their nodes.

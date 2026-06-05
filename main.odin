@@ -15,6 +15,7 @@ import "core:reflect"
 import "core:thread"
 import "core:encoding/json"
 import "core:hash/xxhash"
+import "core:encoding/base64"
 
 import "vendor:curl"
 
@@ -1474,6 +1475,9 @@ draw_url_text_input :: proc(req: ^Request) {
         engine.ui_padding(8, {.Top, .Bottom})
         engine.ui_padding(10, {.Right, .Left})
 
+        text_input_sig := engine.ui_signal_from_box(text_input_box)
+        method_selector_sig: engine.Signal
+
         {
             engine.ui_set_next_height(engine.ui_fill())
             engine.ui_set_next_width(engine.ui_children_sum(1))
@@ -1491,7 +1495,7 @@ draw_url_text_input :: proc(req: ^Request) {
                 engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
                 engine.ui_text(ICONS[.Chevron])
             }
-            method_selector_sig := engine.ui_signal_from_box(method_selector)
+            method_selector_sig = engine.ui_signal_from_box(method_selector)
             if engine.ui_clicked(method_selector_sig) {
                 log.debug("TODO: Method selector clicked")
             }
@@ -1509,19 +1513,45 @@ draw_url_text_input :: proc(req: ^Request) {
         engine.ui_spacer(engine.ui_px(10, 1))
 
         {
-            if cstring(&req.url[0]) == "" {
-                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme]))
-                engine.ui_text_sized("Enter URL or paste text", THEME_FONT_SIZE_BODY_SM)
-            } else {
-                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
-                engine.ui_text_sized(string(cstring(&req.url[0])), THEME_FONT_SIZE_BODY_SM)
+            engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
+            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
+            url_len := len(cstring(&req.url[0]))
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_px(20, 1))
+            input_result := engine.ui_text_input(
+                engine.Id(req.id),
+                req.url[:],
+                &url_len,
+                engine.TextInputOptions{placeholder = "Enter URL or paste text"},
+            )
+            if input_result.boxes.caret != nil {
+                input_result.boxes.caret.background_color = 1
+            }
+            if input_result.focused {
+                text_input_box.border_color = engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT)
+                text_input_box.border_thickness = 1.5
+            }
+            if input_result.boxes.placeholder != nil {
+                input_result.boxes.placeholder.text_color = engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme])
+            }
+            if input_result.boxes.selection != nil {
+                input_result.boxes.selection.background_color = engine.color_hex_rgb(THEME_SELECTION_DEFAULT[state.config.theme])
+            }
+            if input_result.submitted {
+                send_request(req)
+            }
+            if input_result.changed {
+                modify_request(req)
+            }
+
+            if engine.ui_clicked(text_input_sig) {
+                engine.ui_focus_text_input(engine.Id(req.id))
+            }
+
+            if engine.ui_hovering(text_input_sig) && !engine.ui_hovering(method_selector_sig) {
+                engine.set_cursor(.IBEAM)
             }
         }
-    }
-
-    text_input_box_sig := engine.ui_signal_from_box(text_input_box)
-    if engine.ui_clicked(text_input_box_sig) {
-        log.debug("TODO: Text input box clicked")
     }
 }
 
@@ -1638,8 +1668,8 @@ draw_request_main_area :: proc(req: ^Request) {
                                 engine.ui_set_next_width(engine.ui_fill())
                                 draw_url_text_input(req)
                                 engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
-                                if draw_button("Send", enabled = false) {
-                                    // TODO: send request
+                                if draw_button("Send", enabled = len(cstring(&req.url[0])) > 0) {
+                                    send_request(req)
                                 }
                                 engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
                                 if draw_icon_button(.Code, icon_size = 24, variant = .SecondaryGrey, size = .Small) {
@@ -1747,12 +1777,12 @@ draw_request_main_area :: proc(req: ^Request) {
                         engine.ui_set_next_border_thickness(0.5)
                         engine.ui_set_next_border_radius(9999)
                         engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
-            engine.ui_row(); {
-                engine.ui_set_next_font_size(18)
-                engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
-                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
-                engine.ui_text("{}")
-            }
+                        engine.ui_row(); {
+                            engine.ui_set_next_font_size(18)
+                            engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+                            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+                            engine.ui_text("{}")
+                        }
                     }
 
                     engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
@@ -3483,6 +3513,926 @@ collection_unmarshaller :: proc(p: ^json.Parser, v: any) -> json.Unmarshal_Error
     return nil
 }
 
+resolve_collection_auth :: proc(collection: ^Collection) -> Authorization {
+    for c := collection; c != nil; c = c.parent {
+        if c.auth.type != .InheritFromParent {
+            return c.auth
+        }
+    }
+
+    // No concrete auth found in the collection chain, so this resolves to no auth.
+    return Authorization{}
+}
+
+resolve_request_auth :: proc(request: ^Request) -> Authorization {
+    if request.auth.type != .InheritFromParent {
+        return request.auth
+    }
+
+    return resolve_collection_auth(request.collection)
+}
+
+trimmed_auth :: proc(auth: Authorization) -> Authorization {
+    auth_local := auth
+    trimmed := auth
+
+    username := strings.trim_space(string(cstring(&auth_local.basic_username[0])))
+    password := strings.trim_space(string(cstring(&auth_local.basic_password[0])))
+    bearer_token := strings.trim_space(string(cstring(&auth_local.bearer_token[0])))
+    bearer_prefix := strings.trim_space(string(cstring(&auth_local.bearer_prefix[0])))
+    api_key_key := strings.trim_space(string(cstring(&auth_local.api_key_key[0])))
+    api_key_value := strings.trim_space(string(cstring(&auth_local.api_key_value[0])))
+
+    mem.zero_item(&trimmed.basic_username)
+    mem.zero_item(&trimmed.basic_password)
+    mem.zero_item(&trimmed.bearer_token)
+    mem.zero_item(&trimmed.bearer_prefix)
+    mem.zero_item(&trimmed.api_key_key)
+    mem.zero_item(&trimmed.api_key_value)
+
+    copy(trimmed.basic_username[:], username)
+    copy(trimmed.basic_password[:], password)
+    copy(trimmed.bearer_token[:], bearer_token)
+    copy(trimmed.bearer_prefix[:], bearer_prefix)
+    copy(trimmed.api_key_key[:], api_key_key)
+    copy(trimmed.api_key_value[:], api_key_value)
+
+    return trimmed
+}
+
+resolve_effective_auth :: proc(tab: TabItem) -> Authorization {
+    switch v in tab {
+    case ^Request:
+        return trimmed_auth(resolve_request_auth(v))
+    case ^Collection:
+        return trimmed_auth(v.auth)
+    case ^Environment:
+        return Authorization{}
+    }
+
+    return Authorization{}
+}
+
+resolve_auth_environment_variables :: proc(auth: Authorization) -> (resolved: Authorization) {
+    resolved = auth
+
+    basic_username_bytes := auth.basic_username
+    basic_username, changed_basic_username := resolve_environment_variables(string(cstring(&basic_username_bytes[0])))
+    defer if changed_basic_username {
+        delete(basic_username)
+    }
+    if changed_basic_username {
+        mem.zero_item(&resolved.basic_username)
+        copy(resolved.basic_username[:], basic_username)
+    }
+
+    basic_password_bytes := auth.basic_password
+    basic_password, changed_basic_password := resolve_environment_variables(string(cstring(&basic_password_bytes[0])))
+    defer if changed_basic_password {
+        delete(basic_password)
+    }
+    if changed_basic_password {
+        mem.zero_item(&resolved.basic_password)
+        copy(resolved.basic_password[:], basic_password)
+    }
+
+    bearer_token_bytes := auth.bearer_token
+    bearer_token, changed_bearer_token := resolve_environment_variables(string(cstring(&bearer_token_bytes[0])))
+    defer if changed_bearer_token {
+        delete(bearer_token)
+    }
+    if changed_bearer_token {
+        mem.zero_item(&resolved.bearer_token)
+        copy(resolved.bearer_token[:], bearer_token)
+    }
+
+    api_key_key_bytes := auth.api_key_key
+    api_key_key, changed_api_key_key := resolve_environment_variables(string(cstring(&api_key_key_bytes[0])))
+    defer if changed_api_key_key {
+        delete(api_key_key)
+    }
+    if changed_api_key_key {
+        mem.zero_item(&resolved.api_key_key)
+        copy(resolved.api_key_key[:], api_key_key)
+    }
+
+    api_key_value_bytes := auth.api_key_value
+    api_key_value, changed_api_key_value := resolve_environment_variables(string(cstring(&api_key_value_bytes[0])))
+    defer if changed_api_key_value {
+        delete(api_key_value)
+    }
+    if changed_api_key_value {
+        mem.zero_item(&resolved.api_key_value)
+        copy(resolved.api_key_value[:], api_key_value)
+    }
+
+    return resolved
+}
+
+current_workspace_selected_environment_index :: proc() -> i32 {
+    if state.active_workspace_index < 0 || state.active_workspace_index >= len(state.workspaces) {
+        return -1
+    }
+
+    workspace := &state.workspaces[state.active_workspace_index]
+    if workspace.selected_environment_id < 0 {
+        return -1
+    }
+
+    for i in 0..<len(workspace.environments) {
+        if workspace.environments[i].id == workspace.selected_environment_id {
+            return cast(i32)i
+        }
+    }
+
+    return -1
+}
+
+current_workspace_selected_environment_name :: proc() -> cstring {
+    index := current_workspace_selected_environment_index()
+    if index < 0 {
+        return "No Environment"
+    }
+
+    workspace := &state.workspaces[state.active_workspace_index]
+    return cstring(&workspace.environments[index].name[0])
+}
+
+current_workspace_selected_environment :: proc() -> ^Environment {
+    index := current_workspace_selected_environment_index()
+    if index < 0 {
+        return nil
+    }
+
+    workspace := &state.workspaces[state.active_workspace_index]
+    return &workspace.environments[index]
+}
+
+lookup_environment_variable_value :: proc(key: string) -> (string, bool) {
+    environment := current_workspace_selected_environment()
+    if environment == nil {
+        return "", false
+    }
+
+    trimmed_key := strings.trim_space(key)
+    if trimmed_key == "" {
+        return "", false
+    }
+
+    for i := cast(i32)len(environment.variables) - 1; i >= 0; i -= 1 {
+        field := &environment.variables[i]
+        if !field.enabled {
+            continue
+        }
+
+        variable_key := strings.trim_space(string(cstring(&field.variable[0])))
+        if variable_key == trimmed_key {
+            value := string(cstring(&field.value[0]))
+            if strings.trim_space(value) == "" {
+                continue
+            }
+
+            return value, true
+        }
+    }
+
+    return "", false
+}
+
+build_final_request_url :: proc(request: ^Request, effective_auth: Authorization, allocator := context.allocator) -> string {
+    final_url := strings.builder_make_len_cap(0, 1024, allocator)
+
+    request_url := strings.trim_space(string(cstring(&request.url[0])))
+    resolved_request_url, request_url_changed := resolve_environment_variables(request_url, allocator)
+    defer if request_url_changed {
+        delete(resolved_request_url)
+    }
+    if request_url_changed {
+        request_url = resolved_request_url
+    }
+
+    path_end := len(request_url)
+    for i := 0; i < len(request_url); i += 1 {
+        if request_url[i] == '?' || request_url[i] == '#' {
+            path_end = i
+            break
+        }
+    }
+
+    url_up_to_query := request_url[:path_end]
+    path_start := 0
+    scheme_sep := strings.index(url_up_to_query, "://")
+    if scheme_sep >= 0 {
+        after_scheme := scheme_sep + 3
+        slash_pos := strings.index_byte(url_up_to_query[after_scheme:], '/')
+        if slash_pos < 0 {
+            strings.write_string(&final_url, url_up_to_query)
+        } else {
+            path_start = after_scheme + slash_pos
+            strings.write_string(&final_url, url_up_to_query[:path_start])
+
+            path := url_up_to_query[path_start:]
+            encoded_path := percent_encode_url_path_preserving_slashes(path, allocator)
+            defer delete(encoded_path)
+            strings.write_string(&final_url, encoded_path)
+        }
+    } else {
+        path := url_up_to_query[path_start:]
+        encoded_path := percent_encode_url_path_preserving_slashes(path, allocator)
+        defer delete(encoded_path)
+        strings.write_string(&final_url, encoded_path)
+    }
+
+    for key, &param in request.path_params {
+        if cstring(&param.value[0]) == "" {
+            continue
+        }
+
+        placeholder := fmt.aprintf(":%s", key)
+        defer delete(placeholder)
+        path_param_value := string(cstring(&param.value[0]))
+        resolved_path_param_value, path_param_changed := resolve_environment_variables(path_param_value, allocator)
+        defer if path_param_changed {
+            delete(resolved_path_param_value)
+        }
+        if path_param_changed {
+            path_param_value = resolved_path_param_value
+        }
+
+        percent_encoded_value := percent_encode_url_path(path_param_value, allocator)
+        defer delete(percent_encoded_value)
+        strings.builder_replace_all(&final_url, placeholder, percent_encoded_value)
+    }
+
+    effective_api_key_key_bytes := effective_auth.api_key_key
+    effective_api_key_key := strings.trim_space(string(cstring(&effective_api_key_key_bytes[0])))
+    should_write_ampersand := false
+    if len(request.query_params) > 0 || (effective_auth.type == .ApiKey && effective_auth.api_key_add_to == .QueryParam && effective_api_key_key != "") {
+        strings.write_byte(&final_url, '?')
+    }
+
+    if effective_auth.type == .ApiKey && effective_auth.api_key_add_to == .QueryParam {
+        api_value_bytes := effective_auth.api_key_value
+        api_value := string(cstring(&api_value_bytes[0]))
+        if effective_api_key_key != "" {
+            should_write_ampersand = true
+
+            key_encoded := percent_encode_query_param_component(effective_api_key_key, allocator)
+            defer delete(key_encoded)
+            strings.write_string(&final_url, key_encoded)
+
+            if api_value != "" {
+                value_encoded := percent_encode_query_param_component(api_value, allocator)
+                defer delete(value_encoded)
+                strings.write_byte(&final_url, '=')
+                strings.write_string(&final_url, value_encoded)
+            }
+        }
+    }
+
+    api_key_query_key := ""
+    if effective_auth.type == .ApiKey && effective_auth.api_key_add_to == .QueryParam {
+        api_key_query_key = effective_api_key_key
+    }
+
+    for &query in request.query_params {
+        key := string(cstring(&query.key[0]))
+        value := string(cstring(&query.value[0]))
+
+        resolved_key, key_changed := resolve_environment_variables(key, allocator)
+        defer if key_changed {
+            delete(resolved_key)
+        }
+        if key_changed {
+            key = resolved_key
+        }
+
+        key = strings.trim_space(key)
+
+        resolved_value, value_changed := resolve_environment_variables(value, allocator)
+        defer if value_changed {
+            delete(resolved_value)
+        }
+        if value_changed {
+            value = resolved_value
+        }
+
+        if query.disabled || key == "" || (api_key_query_key != "" && api_key_query_key == key) {
+            continue
+        }
+        if should_write_ampersand {
+            strings.write_byte(&final_url, '&')
+        }
+
+        should_write_ampersand = true
+
+        key_encoded := percent_encode_query_param_component(key, allocator)
+        defer delete(key_encoded)
+        strings.write_string(&final_url, key_encoded)
+
+        if value != "" {
+            value_encoded := percent_encode_query_param_component(value, allocator)
+            defer delete(value_encoded)
+            strings.write_byte(&final_url, '=')
+            strings.write_string(&final_url, value_encoded)
+        }
+    }
+
+    return strings.to_string(final_url)
+}
+
+resolve_environment_variables :: proc(raw: string, allocator := context.allocator) -> (resolved: string, changed: bool) {
+    if raw == "" {
+        return "", false
+    }
+
+    has_placeholder := false
+    for i := 0; i+1 < len(raw); i += 1 {
+        if raw[i] == '{' && raw[i+1] == '{' {
+            has_placeholder = true
+            break
+        }
+    }
+
+    if !has_placeholder || current_workspace_selected_environment() == nil {
+        return "", false
+    }
+
+    sb := strings.builder_make_len_cap(0, len(raw), allocator)
+    defer if !changed {
+        strings.builder_destroy(&sb)
+    }
+
+    write_start := 0
+    i := 0
+    for i < len(raw)-1 {
+        if raw[i] == '{' && raw[i+1] == '{' {
+            close_index := -1
+            j := i + 2
+            for j < len(raw)-1 {
+                if raw[j] == '}' && raw[j+1] == '}' {
+                    close_index = j
+                    break
+                }
+                j += 1
+            }
+
+            if close_index < 0 {
+                break
+            }
+
+            token := strings.trim_space(raw[i+2:close_index])
+            if token != "" {
+                value, ok := lookup_environment_variable_value(token)
+                if ok {
+                    if write_start < i {
+                        strings.write_string(&sb, raw[write_start:i])
+                    }
+
+                    strings.write_string(&sb, value)
+                    changed = true
+                    i = close_index + 2
+                    write_start = i
+                    continue
+                }
+            }
+
+            i = close_index + 2
+            continue
+        }
+
+        i += 1
+    }
+
+    if !changed {
+        return "", false
+    }
+
+    if write_start < len(raw) {
+        strings.write_string(&sb, raw[write_start:])
+    }
+
+    return strings.to_string(sb), true
+}
+
+send_request :: proc(request: ^Request) {
+    // request_index := qt.qvariant_toInt(argv[1])
+    // assert(request_index >= 0 && request_index < cast(i32)len(state.tabs))
+
+    // request := state.tabs[request_index].(^Request)
+
+    if request.status == .Running {
+        return
+        // break signal_switch
+    }
+
+    handle := curl.easy_init()
+    request.curl_handle = handle
+    request.status = .Running
+    request.response.status_code = 0
+    request.response.time.total = 0
+    request.response.size = 0
+
+    for header in request.response.headers {
+        delete(header.key)
+        delete(header.value)
+    }
+    clear(&request.response.headers)
+    // if request.response_headers_model != nil {
+    //     qt.qabstractitemmodel_beginResetModel(cast(^qt.QAbstractItemModel)request.response_headers_model)
+    //     qt.qabstractitemmodel_endResetModel(cast(^qt.QAbstractItemModel)request.response_headers_model)
+    // }
+
+    // { // Let Qt know we updated the status
+    //     roles := [?]i32{
+    //         cast(i32)RequestListRoles.Status,
+    //     }
+
+    //     parent := qt.qmodelindex_create()
+    //     defer qt.qmodelindex_delete(parent)
+    //     index := qt.qabstractlistmodel_index(requests_list_model, request_index, 0, parent)
+    //     defer qt.qmodelindex_delete(index)
+    //     qt.qabstractitemmodel_dataChanged(cast(^qt.QAbstractItemModel)requests_list_model, index, index, raw_data(roles[:]), cast(i32)len(roles))
+    // }
+
+    if request.response.pretty_data.buf == nil {
+        strings.builder_init(&request.response.pretty_data)
+    } else {
+        strings.builder_reset(&request.response.pretty_data)
+    }
+
+    if request.response.raw_data.buf == nil {
+        strings.builder_init(&request.response.raw_data)
+    } else {
+        strings.builder_reset(&request.response.raw_data)
+    }
+
+    if request.response.raw_pretty_data.buf == nil {
+        strings.builder_init(&request.response.raw_pretty_data)
+    } else {
+        strings.builder_reset(&request.response.raw_pretty_data)
+    }
+
+    request.response.has_escaped_unicode = false
+    request.response.show_escaped_unicode = false
+
+    if request.response.data.buf == nil {
+        strings.builder_init(&request.response.data)
+    } else {
+        strings.builder_reset(&request.response.data)
+    }
+
+    effective_auth := resolve_auth_environment_variables(trimmed_auth(resolve_request_auth(request)))
+    effective_api_key_key := string(cstring(&effective_auth.api_key_key[0]))
+    effective_api_key_key_lower := strings.to_lower(effective_api_key_key)
+    defer delete(effective_api_key_key_lower)
+
+    for &header in request.headers {
+        if header.disabled {
+            continue
+        }
+
+        // Use the cstring's length to terminate at the first null byte
+        // otherwise the join ends up with multiple null bytes between the key and value
+        // and that causes the eventual cstring conversion to terminate at the first null byte
+        // which is after the key.
+
+        key_cstr := cstring(&header.key[0])
+        value_cstr := cstring(&header.value[0])
+        key := string(header.key[:len(key_cstr)])
+        value := string(header.value[:len(value_cstr)])
+
+        resolved_key, key_changed := resolve_environment_variables(key)
+        defer if key_changed {
+            delete(resolved_key)
+        }
+        if key_changed {
+            key = resolved_key
+        }
+
+        resolved_value, value_changed := resolve_environment_variables(value)
+        defer if value_changed {
+            delete(resolved_value)
+        }
+        if value_changed {
+            value = resolved_value
+        }
+
+        // TODO: I still have to make a final decision on this. Maybe even make it configurable or something?
+        // Skip the user-set content-type header in favor of the request body type
+        key_lower := strings.to_lower(key)
+        defer delete(key_lower)
+        if key_lower == "content-type" && request.body.type != .None {
+            continue
+        }
+        if key_lower == "authorization" && effective_auth.type != .InheritFromParent && effective_auth.type != .ApiKey && effective_auth.type != .NoAuth {
+            continue
+        }
+        if effective_auth.type == .ApiKey && effective_auth.api_key_add_to == .Header && key_lower == effective_api_key_key_lower {
+            continue
+        }
+
+        final_header_str := strings.join({key, value}, ": ")
+        defer delete(final_header_str)
+        header_value := strings.clone_to_cstring(final_header_str)
+        defer delete(header_value)
+        request.curl_headers = curl.slist_append(request.curl_headers, header_value)
+    }
+
+    body_text := strings.to_string(request.body.text)
+    resolved_body_text, body_text_changed := resolve_environment_variables(body_text)
+    defer if body_text_changed {
+        delete(resolved_body_text)
+    }
+    if body_text_changed {
+        body_text = resolved_body_text
+    }
+
+    // --- Authorization header generation ---
+    auth_switch: switch effective_auth.type {
+    case .InheritFromParent:
+    case .NoAuth:
+        // no-op
+    case .Basic:
+        username := string(cstring(&effective_auth.basic_username[0]))
+        password := string(cstring(&effective_auth.basic_password[0]))
+        if username != "" || password != "" {
+            credentials := fmt.aprintf("%s:%s", username, password)
+            defer delete(credentials)
+            encoded := base64.encode(transmute([]u8)credentials)
+            defer delete(encoded)
+            auth_header := fmt.aprintf("Authorization: Basic %s", encoded)
+            defer delete(auth_header)
+            auth_cstr := strings.clone_to_cstring(auth_header)
+            defer delete(auth_cstr)
+            request.curl_headers = curl.slist_append(request.curl_headers, auth_cstr)
+        }
+    case .Token:
+        token := string(cstring(&effective_auth.bearer_token[0]))
+        if token != "" {
+            prefix := string(cstring(&effective_auth.bearer_prefix[0]))
+            if prefix == "" {
+                prefix = "Bearer"
+            }
+            auth_header := fmt.aprintf("Authorization: %s %s", prefix, token)
+            defer delete(auth_header)
+            auth_cstr := strings.clone_to_cstring(auth_header)
+            defer delete(auth_cstr)
+            request.curl_headers = curl.slist_append(request.curl_headers, auth_cstr)
+        }
+    case .ApiKey:
+        key := effective_api_key_key
+        value := string(cstring(&effective_auth.api_key_value[0]))
+        if key != "" && effective_auth.api_key_add_to == .Header {
+            api_header := fmt.aprintf("%s: %s", key, value)
+            defer delete(api_header)
+            api_cstr := strings.clone_to_cstring(api_header)
+            defer delete(api_cstr)
+            request.curl_headers = curl.slist_append(request.curl_headers, api_cstr)
+        }
+    }
+
+    body_switch: switch request.body.type {
+    case .None:
+        // Do nothing
+    case .Text:
+        content_type := cstring("Content-Type: text/plain")
+        request.curl_headers = curl.slist_append(request.curl_headers, content_type)
+        ensure(curl.easy_setopt(handle, .POSTFIELDSIZE, len(body_text)) == .E_OK)
+        ensure(curl.easy_setopt(handle, .COPYPOSTFIELDS, body_text) == .E_OK)
+    case .JSON:
+        content_type := cstring("Content-Type: application/json")
+        request.curl_headers = curl.slist_append(request.curl_headers, content_type)
+        ensure(curl.easy_setopt(handle, .POSTFIELDSIZE, len(body_text)) == .E_OK)
+        ensure(curl.easy_setopt(handle, .COPYPOSTFIELDS, body_text) == .E_OK)
+    case .XML:
+        content_type := cstring("Content-Type: text/xml")
+        request.curl_headers = curl.slist_append(request.curl_headers, content_type)
+        ensure(curl.easy_setopt(handle, .POSTFIELDSIZE, len(body_text)) == .E_OK)
+        ensure(curl.easy_setopt(handle, .COPYPOSTFIELDS, body_text) == .E_OK)
+    case .HTML:
+        content_type := cstring("Content-Type: text/html")
+        request.curl_headers = curl.slist_append(request.curl_headers, content_type)
+        ensure(curl.easy_setopt(handle, .POSTFIELDSIZE, len(body_text)) == .E_OK)
+        ensure(curl.easy_setopt(handle, .COPYPOSTFIELDS, body_text) == .E_OK)
+    case .X_WWW_Form_Urlencoded:
+        content_type := cstring("Content-Type: application/x-www-form-urlencoded")
+        request.curl_headers = curl.slist_append(request.curl_headers, content_type)
+        data: strings.Builder
+        defer strings.builder_destroy(&data)
+
+        for &field, i in request.body.structured {
+            if field.disabled {
+                continue
+            }
+            if i != 0 {
+                strings.write_byte(&data, '&')
+            }
+
+            field_key := string(cstring(raw_data(field.key[:])))
+            resolved_field_key, field_key_changed := resolve_environment_variables(field_key)
+            defer if field_key_changed {
+                delete(resolved_field_key)
+            }
+            if field_key_changed {
+                field_key = resolved_field_key
+            }
+
+            field_value := string(cstring(raw_data(field.value[:])))
+            resolved_field_value, field_value_changed := resolve_environment_variables(field_value)
+            defer if field_value_changed {
+                delete(resolved_field_value)
+            }
+            if field_value_changed {
+                field_value = resolved_field_value
+            }
+
+            encoded_key := percent_encode_query_param_component(field_key)
+            defer delete(encoded_key)
+            encoded_value := percent_encode_query_param_component(field_value)
+            defer delete(encoded_value)
+            encoded_field := fmt.aprintf("%s=%s", encoded_key, encoded_value)
+            defer delete(encoded_field)
+
+            strings.write_string(&data, encoded_field)
+        }
+        // Tell curl to copy the post fields since we delete the builder at the end of the scope
+        ensure(curl.easy_setopt(handle, .COPYPOSTFIELDS, strings.to_string(data)) == .E_OK)
+    case .Form:
+        content_type := cstring("Content-Type: multipart/form-data")
+        request.curl_headers = curl.slist_append(request.curl_headers, content_type)
+
+        form := curl.mime_init(handle)
+        ensure(form != nil)
+        request.form = form
+
+        for &field in request.body.structured {
+            if field.disabled {
+                continue
+            }
+
+            if field.is_file {
+                field_key := string(cstring(raw_data(field.key[:])))
+                resolved_field_key, field_key_changed := resolve_environment_variables(field_key)
+                defer if field_key_changed {
+                    delete(resolved_field_key)
+                }
+                if field_key_changed {
+                    field_key = resolved_field_key
+                }
+
+                field_content_type := string(cstring(&field.content_type[0]))
+                resolved_field_content_type, field_content_type_changed := resolve_environment_variables(field_content_type)
+                defer if field_content_type_changed {
+                    delete(resolved_field_content_type)
+                }
+                if field_content_type_changed {
+                    field_content_type = resolved_field_content_type
+                }
+
+                for file_path in field.file_paths {
+                    if file_path == "" {
+                        log.warn("Empty file path in form field, skipping. This should never happen. Please report this to the developers.")
+                        continue
+                    }
+
+                    part := curl.mime_addpart(form)
+                    field_key_cstr := strings.clone_to_cstring(field_key)
+                    defer delete(field_key_cstr)
+                    curl.mime_name(part, field_key_cstr)
+
+                    // TODO: curl does a little bit of recognition of the content type based on a few heuristics
+                    // In the future we should implement our own "advanced" heuristics to guess the content type
+                    // See: https://curl.se/libcurl/c/curl_mime_type.html
+                    if field_content_type != "" {
+                        field_content_type_cstr := strings.clone_to_cstring(field_content_type)
+                        defer delete(field_content_type_cstr)
+                        curl.mime_type(part, field_content_type_cstr)
+                    }
+
+                    // TODO: check the file exists before trying to send it and show an error if it doesn't
+                    // the error should be displayed to the user in the UI in addition to logging it
+
+                    file_path_cstr := strings.clone_to_cstring(file_path)
+                    defer delete(file_path_cstr)
+                    code := curl.mime_filedata(part, cast(rawptr)file_path_cstr)
+                    if code != .E_OK {
+                        // TODO: display the error in the UI in addition to logging it
+                        log.errorf("Failed to send file: %v", code)
+                    }
+                }
+            } else {
+                field_key := string(cstring(raw_data(field.key[:])))
+                resolved_field_key, field_key_changed := resolve_environment_variables(field_key)
+                defer if field_key_changed {
+                    delete(resolved_field_key)
+                }
+                if field_key_changed {
+                    field_key = resolved_field_key
+                }
+
+                field_value := string(cstring(raw_data(field.value[:])))
+                resolved_field_value, field_value_changed := resolve_environment_variables(field_value)
+                defer if field_value_changed {
+                    delete(resolved_field_value)
+                }
+                if field_value_changed {
+                    field_value = resolved_field_value
+                }
+
+                field_content_type := string(cstring(&field.content_type[0]))
+                resolved_field_content_type, field_content_type_changed := resolve_environment_variables(field_content_type)
+                defer if field_content_type_changed {
+                    delete(resolved_field_content_type)
+                }
+                if field_content_type_changed {
+                    field_content_type = resolved_field_content_type
+                }
+
+                part := curl.mime_addpart(form)
+                field_key_cstr := strings.clone_to_cstring(field_key)
+                defer delete(field_key_cstr)
+                curl.mime_name(part, field_key_cstr)
+
+                // TODO: curl does a little bit of recognition of the content type based on a few heuristics
+                // In the future we should implement our own "advanced" heuristics to guess the content type
+                // See: https://curl.se/libcurl/c/curl_mime_type.html
+                if field_content_type != "" {
+                    field_content_type_cstr := strings.clone_to_cstring(field_content_type)
+                    defer delete(field_content_type_cstr)
+                    curl.mime_type(part, field_content_type_cstr)
+                }
+
+                curl.mime_data(part, raw_data(field_value), cast(uint)len(field_value))
+            }
+        }
+
+        ensure(curl.easy_setopt(handle, .MIMEPOST, form) == .E_OK)
+    case .File:
+        if request.body.binary_path == "" {
+            break body_switch
+        }
+
+        // TODO: auto-detect what the file is and set the content-type based on that?
+        content_type := cstring("Content-Type: application/octet-stream")
+        request.curl_headers = curl.slist_append(request.curl_headers, content_type)
+        file, err := os.open(request.body.binary_path)
+
+        if err != nil {
+            request.status = .Error
+
+            // roles := [?]i32{
+            //     cast(i32)RequestListRoles.Status,
+            //     cast(i32)RequestListRoles.ResponseData,
+            // }
+
+            // parent := qt.qmodelindex_create()
+            // defer qt.qmodelindex_delete(parent)
+            // index := qt.qabstractlistmodel_index(requests_list_model, request_index, 0, parent)
+            // defer qt.qmodelindex_delete(index)
+
+            switch err {
+            case .Not_Exist:
+                msg := fmt.aprintf("File \"%v\" specified in the body doesn't exist", request.body.binary_path)
+                defer delete(msg)
+                strings.write_string(&request.response.data, msg)
+            case .Permission_Denied:
+                msg := fmt.aprintf("Moonladder lacks the permissions to access \"%v\"", request.body.binary_path)
+                defer delete(msg)
+                strings.write_string(&request.response.data, msg)
+            case:
+                log.errorf("Failed to open \"%s\": %v", request.body.binary_path, err)
+                strings.write_string(&request.response.data, "Unknown error")
+            }
+
+            // qt.qabstractitemmodel_dataChanged(cast(^qt.QAbstractItemModel)requests_list_model, index, index, raw_data(roles[:]), cast(i32)len(roles))
+            return
+        }
+
+        fi, stat_err := os.stat(request.body.binary_path, context.allocator)
+        if stat_err != nil {
+            request.status = .Error
+
+            log.errorf("Failed to stat file \"%s\": %v", request.body.binary_path, stat_err)
+
+            // roles := [?]i32{
+            //     cast(i32)RequestListRoles.Status,
+            //     cast(i32)RequestListRoles.ResponseData,
+            // }
+
+            // parent := qt.qmodelindex_create()
+            // defer qt.qmodelindex_delete(parent)
+            // index := qt.qabstractlistmodel_index(requests_list_model, request_index, 0, parent)
+            // defer qt.qmodelindex_delete(index)
+
+            // qt.qabstractitemmodel_dataChanged(cast(^qt.QAbstractItemModel)requests_list_model, index, index, raw_data(roles[:]), cast(i32)len(roles))
+
+            return
+        }
+        defer os.file_info_delete(fi, context.allocator)
+
+        ensure(curl.easy_setopt(handle, .POST, 1) == .E_OK)
+        // Tell curl we're doing an upload so that it puts the content-length header
+        // We can't put that header by hand, libcurl strips it.
+        ensure(curl.easy_setopt(handle, .UPLOAD, 1) == .E_OK)
+        ensure(curl.easy_setopt(handle, .INFILESIZE_LARGE, fi.size) == .E_OK)
+        ensure(curl.easy_setopt(handle, .READDATA, file) == .E_OK)
+        ensure(curl.easy_setopt(handle, .READFUNCTION, proc "c" (ptr: [^]u8, size, nmemb: uint, userdata: rawptr) -> uint {
+            context = runtime.default_context()
+            file := cast(^os.File)userdata
+
+            buf := make([]u8, nmemb * size)
+            defer delete(buf)
+            read, err := os.read(file, buf)
+
+            mem.copy(ptr, raw_data(buf), read)
+
+            return cast(uint)read
+        }) == .E_OK)
+    }
+
+    final_url := build_final_request_url(request, effective_auth)
+    defer delete(final_url)
+    final_url_cstr := strings.clone_to_cstring(final_url)
+    defer delete(final_url_cstr)
+
+    // TODO: skip ssl verification option
+    // ensure(curl.easy_setopt(handle, .SSL_VERIFYHOST, false) == .E_OK)
+    // ensure(curl.easy_setopt(handle, .SSL_VERIFYPEER, false) == .E_OK)
+    ensure(curl.easy_setopt(handle, .URL, final_url_cstr) == .E_OK)
+    ensure(curl.easy_setopt(handle, .HTTPHEADER, request.curl_headers) == .E_OK)
+    method := strings.to_upper(reflect.enum_string(request.method))
+    defer delete(method)
+    ensure(curl.easy_setopt(handle, .CUSTOMREQUEST, method) == .E_OK)
+    ensure(curl.easy_setopt(handle, .FOLLOWLOCATION, state.config.follow_redirects) == .E_OK)
+    ensure(curl.easy_setopt(handle, .WRITEFUNCTION, proc "c" (buffer: [^]byte, size, nitems: uint, userdata: rawptr) -> uint {
+        context = runtime.default_context()
+        sb := cast(^strings.Builder)userdata
+
+        data := strings.string_from_ptr(buffer, cast(int)nitems)
+        strings.write_string(sb, data)
+
+        return nitems
+    }) == .E_OK)
+    ensure(curl.easy_setopt(handle, .WRITEDATA, &request.response.data) == .E_OK)
+    curl.easy_setopt(handle, .HEADERDATA, &request.response.headers)
+    curl.easy_setopt(handle, .HEADERFUNCTION, proc "c" (buffer: [^]byte, size, nitems: uint, userdata: rawptr) -> uint {
+        context = runtime.default_context()
+
+        headers := cast(^[dynamic]ResponseHeader)userdata
+        data := strings.trim_space(strings.string_from_ptr(buffer, cast(int)(size * nitems)))
+        if data == "" {
+            return size * nitems
+        }
+
+        // If we received a new response, discard previous headers (e.g. redirects).
+        if len(data) >= 5 && data[:5] == "HTTP/" {
+            for header in headers {
+                delete(header.key)
+                delete(header.value)
+            }
+            clear(headers)
+        }
+
+        sep := strings.index_byte(data, ':')
+        if sep <= 0 {
+            return size * nitems
+        }
+
+        key_value := strings.split_n(data, ": ", 2)
+        defer delete(key_value)
+
+        if len(key_value) > 1 {
+            key := strings.to_lower(key_value[0])
+            value := strings.clone(key_value[1])
+            header := ResponseHeader{key, value}
+
+            // Allow duplicating these specific headers.
+            // Set-Cookie: RFC9110 Section 5.3
+            // WWW-Authenticate: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/WWW-Authenticate
+            if key != "set-cookie" && key != "www-authenticate" {
+                for &existing_header in headers {
+                    if existing_header.key == key {
+                        delete(key)
+                        delete(value)
+                        merged := strings.join({existing_header.value, key_value[1]}, ", ")
+                        delete(existing_header.value)
+                        existing_header.value = merged
+                        return size * nitems
+                    }
+                }
+            }
+
+            append(headers, header)
+        }
+
+        return size * nitems
+    })
+    ensure(curl.easy_setopt(handle, .TIMEOUT_MS, state.config.timeout_ms) == .E_OK)
+
+    curl.multi_add_handle(state.curl_multi_handle, handle)
+}
+
 new_request_tab :: proc() {
     req := new(Request)
     req.id = rand.int63()
@@ -3587,6 +4537,10 @@ hash_request :: proc(request: ^Request) -> u128 {
     defer xxhash.XXH3_128_reset(state.hasher)
 
     return xxhash.XXH3_128_digest(state.hasher)
+}
+
+modify_request :: proc(request: ^Request) {
+    request.is_modified = hash_request(request) != request.modification_hash
 }
 
 main :: proc() {
@@ -3698,9 +4652,9 @@ main :: proc() {
                         new_request_tab()
                         state.active_tab_index = len(state.tabs) - 1
                     } else {
-                        state.config.theme = state.config.theme == .Light ? .Dark : .Light
-                        engine.set_clear_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
-                        save_config()
+                        // state.config.theme = state.config.theme == .Light ? .Dark : .Light
+                        // engine.set_clear_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+                        // save_config()
                     }
                 }
                 if e.key.scancode == .W {
@@ -3743,8 +4697,14 @@ main :: proc() {
                         sig := engine.ui_signal_from_box(split_interactive)
                         if engine.ui_hovering(sig) || engine.ui_dragging(sig) {
                             split_visual.background_color = engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT)
+                            log.debug("hovering or dragging")
                         } else {
                             split_visual.background_color = engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme])
+                        }
+                        // TODO: DOESN'T WORK UNLESS we release exactly while hovering the divider
+                        if engine.ui_released(sig) {
+                            log.debug("released")
+                            save_config()
                         }
                         draw_main_area()
                     }
