@@ -469,7 +469,7 @@ draw_topbar :: proc() {
         engine.ui_text_sized(ICONS[.Chevron], 16)
 
         engine.ui_spacer(engine.ui_percent(1, 0.05))
-        if draw_icon_button(.Settings, engine.color_hex_rgb(THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .ExtraSmall, variant = .SecondaryGrey) {
+        if draw_icon_button(.Settings, engine.color_hex_rgb(THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .ExtraSmall, variant = .SecondaryGrey, tooltip_text = "Settings") {
             fmt.println("TODO: settings")
         }
     }
@@ -607,7 +607,11 @@ draw_button :: proc(
         right_icon_text = ICONS[right_icon.?]
     }
 
-    return engine.ui_button_styled_with_icons(label, style, left_icon = left_icon_text, right_icon = right_icon_text, enabled = enabled)
+    clicked, box := engine.ui_button_styled_with_icons(label, style, left_icon = left_icon_text, right_icon = right_icon_text, enabled = enabled)
+    if engine.ui_hovering(engine.ui_signal_from_box(box)) {
+        engine.set_cursor(.HAND)
+    }
+    return clicked
 }
 
 @require_results
@@ -618,6 +622,7 @@ draw_icon_button :: proc(
     variant := ButtonVariant.Primary,
     size := IconButtonSize.Medium,
     enabled := true,
+    tooltip_text: string,
 ) -> bool {
     engine.ui_set_next_width(engine.ui_children_sum(1))
     engine.ui_set_next_height(engine.ui_children_sum(1))
@@ -732,7 +737,18 @@ draw_icon_button :: proc(
 
     engine.ui_push_font_size(icon_size)
     defer engine.ui_pop_font_size()
-    return engine.ui_button_styled(ICONS[icon], style, enabled = enabled)
+    clicked, box := engine.ui_button_styled(ICONS[icon], style, enabled = enabled)
+    if engine.ui_hovering(engine.ui_signal_from_box(box)) {
+        engine.set_cursor(.HAND)
+
+        engine.ui_set_next_font_size(THEME_FONT_SIZE_LABEL)
+        engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+        engine.ui_set_next_border_thickness(0.5)
+        engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+        engine.ui_tooltip_text(tooltip_text, target = box)
+    }
+
+    return clicked
 }
 
 draw_collections_list :: proc() {
@@ -801,8 +817,12 @@ draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
         engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
         engine.ui_set_next_width(engine.ui_fill())
         engine.ui_set_next_height(engine.ui_children_sum(1))
-        box := engine.ui_row(engine.Id(collection.id)); sig := engine.ui_signal_from_box(box); {
+
+        id := engine.ui_make_id(fmt.tprintf("collection_%d", collection.id))
+
+        box := engine.ui_row(id); sig := engine.ui_signal_from_box(box); {
             if engine.ui_hovering(sig) {
+                engine.set_cursor(.HAND)
                 box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme])
             } else {
                 box.background_color = TRANSPARENT
@@ -849,7 +869,10 @@ draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
                     engine.ui_set_next_width(engine.ui_children_sum(1))
                     engine.ui_set_next_height(engine.ui_children_sum(1))
                     engine.ui_set_next_flags({.MouseClickable})
-                    plus := engine.ui_row(engine.Id(collection.id) + 5); {
+
+                    id := engine.ui_make_id(fmt.tprintf("collection_%d_plus", collection.id))
+
+                    plus := engine.ui_row(id); {
                         plus_sig := engine.ui_signal_from_box(plus)
                         engine.ui_set_next_text_color(engine.color_hex_rgb(engine.ui_hovering(plus_sig) ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
                         engine.ui_text_sized(ICONS[.Plus], 12)
@@ -940,8 +963,12 @@ draw_request_item :: proc(request: ^Request, indent_level := 0) {
     engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
     engine.ui_set_next_width(engine.ui_fill())
     engine.ui_set_next_height(engine.ui_children_sum(1))
-    box := engine.ui_row(engine.Id(request.id)); sig := engine.ui_signal_from_box(box); {
+
+    id := engine.ui_make_id(fmt.tprintf("request_%d", request.id))
+
+    box := engine.ui_row(id); sig := engine.ui_signal_from_box(box); {
         if engine.ui_hovering(sig) {
+            engine.set_cursor(.HAND)
             box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme])
         } else {
             box.background_color = TRANSPARENT
@@ -1071,9 +1098,13 @@ draw_environment_item :: proc(environment: ^Environment) {
     engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
     engine.ui_set_next_width(engine.ui_fill())
     engine.ui_set_next_height(engine.ui_children_sum(1))
-    box := engine.ui_row(engine.Id(environment.id)); {
+
+    id := engine.ui_make_id(fmt.tprintf("environment_%d", environment.id))
+
+    box := engine.ui_row(id); {
         sig := engine.ui_signal_from_box(box)
         if engine.ui_hovering(sig) {
+            engine.set_cursor(.HAND)
             box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme])
         } else {
             box.background_color = TRANSPARENT
@@ -1125,12 +1156,12 @@ draw_sidebar :: proc() {
                 engine.ui_padding(16, {.Left})
                 engine.ui_padding(12, {.Right})
 
-                if draw_icon_button(.Folder, engine.color_hex_rgb(state.config.sidebar_tab == .Collections ? THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme] : THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .Small, variant = state.config.sidebar_tab == .Collections ? .Primary : .SecondaryGrey) {
+                if draw_icon_button(.Folder, engine.color_hex_rgb(state.config.sidebar_tab == .Collections ? THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme] : THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .Small, variant = state.config.sidebar_tab == .Collections ? .Primary : .SecondaryGrey, tooltip_text = "Collections") {
                     state.config.sidebar_tab = .Collections
                     save_config()
                 }
                 engine.ui_spacer(engine.ui_px(10, 1))
-                if draw_icon_button(.Environment, engine.color_hex_rgb(state.config.sidebar_tab == .Environments ? THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme] : THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .Small, variant = state.config.sidebar_tab == .Environments ? .Primary : .SecondaryGrey) {
+                if draw_icon_button(.Environment, engine.color_hex_rgb(state.config.sidebar_tab == .Environments ? THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme] : THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .Small, variant = state.config.sidebar_tab == .Environments ? .Primary : .SecondaryGrey, tooltip_text = "Environments") {
                     state.config.sidebar_tab = .Environments
                     save_config()
                 }
@@ -1164,7 +1195,10 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
             engine.ui_set_next_height(engine.ui_fill())
             engine.ui_set_next_align_y(.Center)
             engine.ui_set_next_flags({.MouseClickable})
-            tab_box := engine.ui_row(engine.Id(req.id)); {
+
+            id := engine.ui_make_id(fmt.tprintf("request_tab_%d", req.id))
+
+            tab_box := engine.ui_row(id); {
                 tab_sig := engine.ui_signal_from_box(tab_box)
                 tab_hovered = engine.ui_hovering(tab_sig)
 
@@ -1175,6 +1209,7 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
                 engine.ui_padding(12, {.Left, .Right})
 
                 name := string(cstring(&req.name[0]))
+                name_raw_w := engine.ui_text_measure_string(name, THEME_FONT_SIZE_BODY_SM).x
 
                 {
                     engine.ui_set_next_height(engine.ui_children_sum(1))
@@ -1188,7 +1223,7 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
 
                         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
 
-                        if engine.ui_text_measure_string(name).x < 80 {
+                        if name_raw_w < 80 {
                             engine.ui_push_pref_width(engine.ui_text_dim(0, 1))
                         } else {
                             engine.ui_push_pref_width(engine.ui_px(80, 1))
@@ -1197,6 +1232,14 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
                         engine.ui_set_next_text_color(engine.color_hex_rgb(tab_hovered || state.active_tab_index == index ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
                         engine.ui_text(name)
                         engine.ui_pop_pref_width()
+
+                        if tab_hovered && name_raw_w >= 80 {
+                            engine.ui_set_next_font_size(THEME_FONT_SIZE_LABEL)
+                            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+                            engine.ui_set_next_border_thickness(0.5)
+                            engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                            engine.ui_tooltip_text(name)
+                        }
                     }
                 }
 
@@ -1215,7 +1258,10 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
                     engine.ui_set_next_flags({.MouseClickable, .DrawBackground})
                     engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
                     engine.ui_set_next_background_color(TRANSPARENT)
-                    box := engine.ui_row(engine.Id(req.id) + 5); {
+
+                    id := engine.ui_make_id(fmt.tprintf("close_request_tab_%d", req.id))
+
+                    box := engine.ui_row(id); {
                         sig := engine.ui_signal_from_box(box)
 
                         engine.ui_padding(4, {.Left, .Right, .Top, .Bottom})
@@ -1225,6 +1271,12 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
                         if engine.ui_hovering(sig) {
                             text_box.text_color = engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme])
                             box.background_color = engine.color_hex_rgb(state.active_tab_index == index ? THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme] : THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+
+                            engine.ui_set_next_font_size(THEME_FONT_SIZE_LABEL)
+                            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+                            engine.ui_set_next_border_thickness(0.5)
+                            engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                            engine.ui_tooltip_text("Close Tab", target = box)
                         }
 
                         if engine.ui_clicked(sig) {
@@ -1306,7 +1358,7 @@ draw_tab_bar :: proc() {
         }
 
         engine.ui_spacer(engine.ui_px(4, 1))
-        if draw_icon_button(.Plus, engine.color_hex_rgb(THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), 16, .TertiaryGrey, .Small) {
+        if draw_icon_button(.Plus, engine.color_hex_rgb(THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), 16, .TertiaryGrey, .Small, tooltip_text = "New Request Tab") {
             new_request_tab()
             state.active_tab_index = len(state.tabs) - 1
         }
@@ -1369,6 +1421,11 @@ draw_checkbox :: proc(checked: ^bool, label: string) {
     engine.ui_set_next_flags({.MouseClickable})
     box := engine.ui_row(); {
         sig := engine.ui_signal_from_box(box)
+
+        if engine.ui_hovering(sig) {
+            engine.set_cursor(.HAND)
+        }
+
         {
             {
                 if checked^ {
@@ -1493,6 +1550,7 @@ draw_url_text_input :: proc(req: ^Request) {
                 engine.ui_text(http_method_string(req.method))
                 engine.ui_spacer(engine.ui_px(16, 1))
                 engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_MD)
                 engine.ui_text(ICONS[.Chevron])
             }
             method_selector_sig = engine.ui_signal_from_box(method_selector)
@@ -1512,6 +1570,12 @@ draw_url_text_input :: proc(req: ^Request) {
 
         engine.ui_spacer(engine.ui_px(10, 1))
 
+        text_input_id := engine.ui_make_id(fmt.tprintf("url_input_%d", req.id))
+
+        if engine.ui_clicked(text_input_sig) {
+            engine.ui_focus_text_input(text_input_id)
+        }
+
         {
             engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
             engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
@@ -1519,7 +1583,7 @@ draw_url_text_input :: proc(req: ^Request) {
             engine.ui_set_next_width(engine.ui_fill())
             engine.ui_set_next_height(engine.ui_px(20, 1))
             input_result := engine.ui_text_input(
-                engine.Id(req.id),
+                text_input_id,
                 req.url[:],
                 &url_len,
                 engine.TextInputOptions{placeholder = "Enter URL or paste text"},
@@ -1542,10 +1606,6 @@ draw_url_text_input :: proc(req: ^Request) {
             }
             if input_result.changed {
                 modify_request(req)
-            }
-
-            if engine.ui_clicked(text_input_sig) {
-                engine.ui_focus_text_input(engine.Id(req.id))
             }
 
             if engine.ui_hovering(text_input_sig) && !engine.ui_hovering(method_selector_sig) {
@@ -1672,7 +1732,7 @@ draw_request_main_area :: proc(req: ^Request) {
                                     send_request(req)
                                 }
                                 engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
-                                if draw_icon_button(.Code, icon_size = 24, variant = .SecondaryGrey, size = .Small) {
+                                if draw_icon_button(.Code, icon_size = 24, variant = .SecondaryGrey, size = .Small, tooltip_text = "Show cURL command") {
                                     // TODO: show curl code dialog
                                 }
                             }
@@ -1703,9 +1763,14 @@ draw_request_main_area :: proc(req: ^Request) {
                                                     engine.ui_set_next_flags({.MouseClickable})
                                                     box := engine.ui_row(id); {
                                                         sig := engine.ui_signal_from_box(box)
+                                                        hovering := engine.ui_hovering(sig)
+
+                                                        if hovering {
+                                                            engine.set_cursor(.HAND)
+                                                        }
 
                                                         engine.ui_padding(12, {.Left, .Right})
-                                                        engine.ui_set_next_text_color(engine.color_hex_rgb(engine.ui_hovering(sig) || option_is_active ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                                                        engine.ui_set_next_text_color(engine.color_hex_rgb(hovering || option_is_active ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
                                                         engine.ui_text_sized(option, THEME_FONT_SIZE_BODY_SM)
 
                                                         if engine.ui_clicked(sig) {
@@ -1824,7 +1889,9 @@ draw_ui_debug_overlay :: proc() {
     engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
     engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
     engine.ui_set_next_flags({.DrawBackground, .DrawBorder, .ClipToBounds, .OccludesBelow, .MouseClickable})
-    overlay := engine.ui_column(engine.Id(0x0D00B6A1)); {
+
+    id := engine.ui_make_id("debug_overlay")
+    overlay := engine.ui_column(id); {
         sig := engine.ui_signal_from_box(overlay)
 
         if engine.ui_pressed(sig) {
