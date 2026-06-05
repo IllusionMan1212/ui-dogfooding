@@ -4697,14 +4697,8 @@ main :: proc() {
                         sig := engine.ui_signal_from_box(split_interactive)
                         if engine.ui_hovering(sig) || engine.ui_dragging(sig) {
                             split_visual.background_color = engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT)
-                            log.debug("hovering or dragging")
                         } else {
                             split_visual.background_color = engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme])
-                        }
-                        // TODO: DOESN'T WORK UNLESS we release exactly while hovering the divider
-                        if engine.ui_released(sig) {
-                            log.debug("released")
-                            save_config()
                         }
                         draw_main_area()
                     }
@@ -4719,6 +4713,10 @@ main :: proc() {
 
         engine.frame_end()
     }
+
+    // Save config to preserve any changes to the window size or sidebar width
+    save_config()
+
     engine.deinit()
 }
 
