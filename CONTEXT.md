@@ -29,5 +29,21 @@ The invisible interactive region (`hit_thickness` pixels wide) around the splitt
 
 ## Visual Properties
 
+## Popup
+
+### Popup (Widget)
+: A reusable immediate-mode popup widget (`ui_popup_begin` / `ui_popup_end`) that renders a floating container anchored to another widget. The popup positions itself below the anchor (left-aligned), flipping above if insufficient space below, and pushes left if off-screen right.
+
+### Popup Backdrop
+: A full-screen transparent `MouseClickable` box rendered behind the popup container. Clicks on the backdrop are detected by the engine in the next frame and cause the popup to close. The popup container itself is `MouseClickable` to absorb clicks on empty space within the popup, preventing them from reaching the backdrop.
+
+### Popup Open State
+: Stored in the engine as `popup_open_id` (an `Id`). The app signals the engine to open a popup via `ui_popup_open(id)` (called from a button click handler) and closes it via `ui_popup_close()` (called from a content item click handler). The engine also auto-closes on backdrop click.
+
+### Popup Root
+: A root-level floating box (`popup_root`) created alongside `tooltip_root` in `ui_begin_build`. All popup containers are children of `popup_root`. In `ui_end_build`, `popup_root` is moved to the end of the root's children (before `tooltip_root`) so popups draw above standard content but below tooltips.
+
+## Visual Properties
+
 ### Brand Color
 Teal/green `#16BAA4`. Defined as `THEME_BORDER_BRAND_DEFAULT` and `THEME_BACKGROUND_BRAND_SOLID` in `theme.odin`. Used for the splitter's hover state.
