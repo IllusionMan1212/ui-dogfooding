@@ -405,6 +405,7 @@ State :: struct {
 
     // UI
     active_tab_index: int,
+    action_menu_workspace_id: i64,
     show_ui_debug_overlay: bool,
     ui_debug_overlay_pos: [2]f32,
     ui_debug_overlay_pos_initialized: bool,
@@ -521,6 +522,7 @@ draw_topbar :: proc() {
 
                         name := string(cstring(&workspace.name[0]))
                         is_active := i == state.active_workspace_index
+                        is_menu_open := state.action_menu_workspace_id == workspace.id
 
                         engine.ui_set_next_width(engine.ui_fill())
                         engine.ui_set_next_height(engine.ui_children_sum(1))
@@ -543,6 +545,7 @@ draw_topbar :: proc() {
                             engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
                             engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
 
+                            engine.ui_push_text_color(engine.color_hex_rgb(is_active ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
                             if i == 0 {
                                 engine.ui_text(ICONS[.Lock])
                             } else {
@@ -551,28 +554,126 @@ draw_topbar :: proc() {
 
                             engine.ui_spacer(engine.ui_px(12, 1))
 
-                            engine.ui_set_next_text_color(engine.color_hex_rgb(is_active ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
                             engine.ui_set_next_font_size(14)
                             engine.ui_text(name)
 
-                            if is_active && !engine.ui_hovering(item_sig) {
+                            engine.ui_pop_text_color()
+
+                            if is_active && !engine.ui_hovering(item_sig) && !is_menu_open {
                                 engine.ui_spacer(engine.ui_fill())
                                 engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]))
                                 engine.ui_text_sized(ICONS[.Check], 16)
                             }
 
-                            if engine.ui_hovering(item_sig) {
+                            if engine.ui_hovering(item_sig) || is_menu_open {
                                 engine.ui_spacer(engine.ui_fill())
                                 engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
-                                engine.ui_text_sized(ICONS[.ThreeDots], 12)
-                                // TODO: clicking the threedots should open the menu to do stuff
+                                engine.ui_set_next_flags({.MouseClickable})
+                                actions_box := engine.ui_text_sized(fmt.tprintf("%v###workspace_icon_%v", ICONS[.ThreeDots], workspace.id), 12)
+                                sig := engine.ui_signal_from_box(actions_box)
+
+                                if engine.ui_hovering(sig) {
+                                    engine.set_cursor(.HAND)
+                                    actions_box.text_color = engine.color_hex_rgb(THEME_TEXT_SECONDARY_HOVER[state.config.theme])
+
+                                    engine.ui_set_next_font_size(THEME_FONT_SIZE_LABEL)
+                                    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+                                    engine.ui_set_next_border_thickness(0.5)
+                                    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                                    engine.ui_tooltip_text("Workspace Actions", target = actions_box)
+                                }
+
+                                if engine.ui_clicked(sig) {
+                                    if is_menu_open {
+                                        state.action_menu_workspace_id = 0
+                                    } else {
+                                        state.action_menu_workspace_id = workspace.id
+                                    }
+                                }
                             }
                         }
 
                         if engine.ui_clicked(engine.ui_signal_from_box(item_box)) && !is_active {
                             state.active_workspace_index = i
+                            state.action_menu_workspace_id = 0
                             engine.ui_popup_close()
                             save_workspaces()
+                        }
+
+                        if is_menu_open {
+                            menu_id := engine.ui_make_id(fmt.tprintf("workspace_menu_%d", workspace.id))
+                            if menu_box := engine.ui_floating_menu_begin(item_box, menu_id, 100); menu_box != nil {
+                                menu_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme])
+                                menu_box.border_color = engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme])
+                                menu_box.border_thickness = 0.5
+                                menu_box.border_radius = THEME_BORDER_RADIUS_MD
+
+                                engine.ui_set_next_height(engine.ui_children_sum(1))
+                                engine.ui_set_next_width(engine.ui_fill())
+                                engine.ui_column(); {
+                                    engine.ui_padding(THEME_SPACING_SM, {.Left, .Right, .Top, .Bottom})
+                                    {
+                                        rename_id := engine.ui_make_id(fmt.tprintf("workspace_rename_%d", workspace.id))
+                                        engine.ui_set_next_width(engine.ui_fill())
+                                        engine.ui_set_next_height(engine.ui_children_sum(1))
+                                        engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+                                        engine.ui_set_next_align_y(.Center)
+                                        engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                                        rename_box := engine.ui_row(rename_id); {
+                                            rename_sig := engine.ui_signal_from_box(rename_box)
+                                            if engine.ui_hovering(rename_sig) {
+                                                engine.set_cursor(.HAND)
+                                                rename_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+                                            } else {
+                                                rename_box.background_color = TRANSPARENT
+                                            }
+                                            engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
+                                            engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
+                                            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                                            engine.ui_set_next_font_size(14)
+                                            engine.ui_text("Rename")
+                                        }
+                                        if engine.ui_clicked(engine.ui_signal_from_box(rename_box)) {
+                                            state.action_menu_workspace_id = 0
+                                            engine.ui_popup_close()
+                                            fmt.println("TODO: rename workspace", name)
+                                        }
+
+                                    }
+
+                                    if i != 0 {
+                                        engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+
+                                        delete_id := engine.ui_make_id(fmt.tprintf("workspace_delete_%d", workspace.id))
+                                        engine.ui_set_next_width(engine.ui_fill())
+                                        engine.ui_set_next_height(engine.ui_children_sum(1))
+                                        engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+                                        engine.ui_set_next_align_y(.Center)
+                                        engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                                        delete_box := engine.ui_row(delete_id); {
+                                            delete_sig := engine.ui_signal_from_box(delete_box)
+                                            if engine.ui_hovering(delete_sig) {
+                                                engine.set_cursor(.HAND)
+                                                delete_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+                                            } else {
+                                                delete_box.background_color = TRANSPARENT
+                                            }
+                                            engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
+                                            engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
+                                            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_ERROR_DEFAULT[state.config.theme]))
+                                            engine.ui_set_next_font_size(14)
+                                            engine.ui_text("Delete")
+                                        }
+                                        if engine.ui_clicked(engine.ui_signal_from_box(delete_box)) {
+                                            state.action_menu_workspace_id = 0
+                                            engine.ui_popup_close()
+                                            fmt.println("TODO: delete workspace", name)
+                                        }
+                                    }
+                                }
+
+                                engine.ui_floating_menu_end()
+                            }
                         }
                     }
                 }

@@ -11,17 +11,21 @@ Next on the list:-
     - [ ] Scrollbars should be clickable and draggable
 - [x] Clipping?
 - [ ] Supporting different mouse clicks
-- [x] Tooltips
+- [ ] Tooltips
     - Needs some heavy polish
     - [x] Need a way to attach this to other widgets
     - [x] Doesn't quite work properly right now.
     - [x] Should be drawn on a higher z-index (???) (not sure how this plays with overlays and dialogs)
+    - [x] Hovering over something that has a tooltip will request infinite frames
+        - Fixed but broke tooltips that follow the mouse
 - [x] BUG: Cursor changing for the split only works if we have one split in the entire app
 - [ ] We need to be able to support changing the language even if XSetLocaleModifiers doesn't work
 - [ ] Auto focus URL field on new request tab
 - [ ] Auto scroll the tabbar to the active tab (when creating a new one) when it's out of view
 - [ ] Ctrl + L for focusing URL field shortcut
     - Shortcuts in general need a good system
+
+- [ ] Dialog
 
 - [ ] Text input
     - [x] When moving the mouse, sometimes the blinking of the caret takes longer (This is something to do with how we handle events I bet)
