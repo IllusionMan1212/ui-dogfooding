@@ -6,6 +6,7 @@ import "core:fmt"
 import "core:os"
 import "core:log"
 import "core:strings"
+import "core:strconv"
 import "core:math"
 import "core:math/rand"
 import "core:io"
@@ -412,7 +413,14 @@ State :: struct {
     ui_debug_overlay_drag_offset: [2]f32,
     ui_debug_overlay_drag_start_mouse: [2]f32,
     ui_debug_overlay_drag_start_pos: [2]f32,
+
+    timeout_buf: [8]u8,
+    timeout_len: int,
 }
+
+TIMEOUT_MIN_MS     :: 0
+TIMEOUT_MAX_MS     :: 3600000
+TIMEOUT_DEFAULT_MS :: 5000
 
 logger: log.Logger
 state: State
@@ -693,7 +701,135 @@ draw_topbar :: proc() {
 
         engine.ui_spacer(engine.ui_percent(1, 0.05))
         if draw_icon_button(.Settings, engine.color_hex_rgb(THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .ExtraSmall, variant = .SecondaryGrey, tooltip_text = "Settings") {
-            fmt.println("TODO: settings")
+            id := engine.ui_make_id("settings_dialog")
+            engine.ui_dialog_open(id)
+        }
+    }
+}
+
+draw_settings_dialog :: proc() {
+    DIALOG_WIDTH :: 400
+    win := engine.get_window_size()
+    engine.ui_set_next_fixed_x((win.x - DIALOG_WIDTH) * 0.5)
+    engine.ui_set_next_fixed_y(150)
+    id := engine.ui_make_id("settings_dialog")
+    if engine.ui_dialog_begin(id) {
+        defer engine.ui_dialog_end()
+
+        // The dialog box is invisible; the inner column carries the size and styling.
+        engine.ui_set_next_width(engine.ui_px(DIALOG_WIDTH, 1))
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_LG)
+        engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+        engine.ui_set_next_flags({.DrawBackground})
+        engine.ui_column(); {
+            engine.ui_padding(24, {.Top, .Bottom, .Left, .Right})
+
+            engine.ui_text_sized("Settings", THEME_FONT_SIZE_BODY_LG)
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+            {
+                engine.ui_set_next_width(engine.ui_fill())
+                engine.ui_set_next_height(engine.ui_children_sum(1))
+                engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                engine.ui_set_next_border_thickness(0.5)
+                engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+                engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
+                engine.ui_column(); {
+                    engine.ui_padding(THEME_SPACING_MD, {.Top, .Bottom, .Left, .Right})
+
+                    {
+                        engine.ui_set_next_width(engine.ui_fill())
+                        engine.ui_set_next_height(engine.ui_children_sum(1))
+                        engine.ui_set_next_align_y(.Center)
+                        engine.ui_row(); {
+                            engine.ui_text("Theme")
+                            engine.ui_spacer(engine.ui_fill())
+                            if draw_button(state.config.theme == .Dark ? "Switch to Light Mode" : "Switch to Dark Mode", size = .Small) {
+                                state.config.theme = state.config.theme == .Dark ? .Light : .Dark
+                            }
+                        }
+                    }
+                    engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+                    {
+                        engine.ui_set_next_width(engine.ui_fill())
+                        engine.ui_set_next_height(engine.ui_children_sum(1))
+                        engine.ui_set_next_align_y(.Center)
+                        engine.ui_row(); {
+                            engine.ui_text("Request Timeout (ms)")
+                            engine.ui_spacer(engine.ui_fill())
+                            engine.ui_set_next_width(engine.ui_px(100, 1))
+                            engine.ui_set_next_height(engine.ui_px(36, 1))
+                            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+                            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                            engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                            engine.ui_set_next_border_thickness(0.5)
+                            engine.ui_set_next_flags({.MouseClickable, .DrawBackground, .DrawBorder})
+                            text_input_box := engine.ui_row(); {
+                                engine.ui_padding(10, {.Left, .Right})
+                                engine.ui_padding(8, {.Top, .Bottom})
+                                engine.ui_set_next_width(engine.ui_fill())
+                                engine.ui_set_next_height(engine.ui_fill())
+                                engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
+
+                                text_input_sig := engine.ui_signal_from_box(text_input_box)
+                                text_input_id := engine.ui_make_id("request_timeout_input")
+
+                                if engine.ui_clicked(text_input_sig) {
+                                    engine.ui_focus_text_input(text_input_id)
+                                }
+                                if engine.ui_hovering(text_input_sig) {
+                                    engine.set_cursor(.IBEAM)
+                                }
+
+                                input_result := engine.ui_text_input(
+                                    text_input_id,
+                                    state.timeout_buf[:], &state.timeout_len,
+                                    engine.TextInputOptions{filter = proc(r: rune) -> bool { return r >= '0' && r <= '9' }},
+                                )
+
+                                if input_result.boxes.caret != nil {
+                                    input_result.boxes.caret.background_color = engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme])
+                                }
+
+                                if input_result.focused {
+                                    text_input_box.border_color = engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT)
+                                    text_input_box.border_thickness = 1.5
+                                }
+
+                                if input_result.boxes.selection != nil {
+                                    input_result.boxes.selection.background_color = engine.color_hex_rgb(THEME_SELECTION_DEFAULT[state.config.theme])
+                                }
+
+                                if input_result.focus_lost || input_result.submitted {
+                                    v, ok := strconv.parse_int(string(state.timeout_buf[:state.timeout_len]))
+                                    if !ok { v = state.config.timeout_ms }         // empty/invalid field -> keep current value
+                                    v = clamp(v, TIMEOUT_MIN_MS, TIMEOUT_MAX_MS)
+                                    state.config.timeout_ms = v
+                                    s := strconv.write_int(state.timeout_buf[:], i64(v), 10)    // re-format -> canonical clamped display
+                                    state.timeout_len = len(s)
+
+                                    save_config()
+                                }
+                            }
+                        }
+                    }
+                    engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+                    {
+                        engine.ui_set_next_width(engine.ui_fill())
+                        engine.ui_set_next_height(engine.ui_children_sum(1))
+                        engine.ui_set_next_align_y(.Center)
+                        engine.ui_row(); {
+                            engine.ui_text("Follow Redirects")
+                            engine.ui_spacer(engine.ui_fill())
+                            if draw_checkbox(&state.config.follow_redirects, "###follow_redirects") {
+                                save_config()
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1637,12 +1773,15 @@ draw_main_area :: proc() {
     }
 }
 
-draw_checkbox :: proc(checked: ^bool, label: string) {
+draw_checkbox :: proc(checked: ^bool, label: string) -> bool {
+    display_str := engine.ui_display_part_from_key_string(label)
+    id_seed := hash.fnv32a(transmute([]byte)engine.ui_hash_part_from_key_string(label))
+
     engine.ui_set_next_width(engine.ui_children_sum(1))
     engine.ui_set_next_height(engine.ui_children_sum(1))
     engine.ui_set_next_align_y(.Center)
     engine.ui_set_next_flags({.MouseClickable})
-    box := engine.ui_row(); {
+    box := engine.ui_row(id_seed); {
         sig := engine.ui_signal_from_box(box)
 
         if engine.ui_hovering(sig) {
@@ -1675,15 +1814,20 @@ draw_checkbox :: proc(checked: ^bool, label: string) {
                     }
                 }
             }
-            engine.ui_spacer(engine.ui_px(10, 1))
-            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
-            engine.ui_text_sized(label, THEME_FONT_SIZE_BODY_SM)
+            if display_str != "" {
+                engine.ui_spacer(engine.ui_px(10, 1))
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                engine.ui_text_sized(display_str, THEME_FONT_SIZE_BODY_SM)
+            }
         }
 
         if engine.ui_clicked(sig) {
             checked^ = !checked^
+            return true
         }
     }
+
+    return false
 }
 
 @require_results
@@ -1812,7 +1956,7 @@ draw_url_text_input :: proc(req: ^Request) {
                 engine.TextInputOptions{placeholder = "Enter URL or paste text"},
             )
             if input_result.boxes.caret != nil {
-                input_result.boxes.caret.background_color = 1
+                input_result.boxes.caret.background_color = engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme])
             }
             if input_result.focused {
                 text_input_box.border_color = engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT)
@@ -1842,7 +1986,7 @@ draw_request_parameters_tab :: proc(req: ^Request) {
     engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
     engine.ui_text_sized("Query Parameters", THEME_FONT_SIZE_BODY_SM)
     engine.ui_spacer(engine.ui_px(10, 1))
-    draw_checkbox(&req.query_params_bulk_edit, "Bulk edit")
+    draw_checkbox(&req.query_params_bulk_edit, "Bulk edit###query_params")
     if req.query_params_bulk_edit {
         // TODO: if bulk edit, show textarea with key=value pairs
     } else {
@@ -1910,7 +2054,7 @@ draw_request_headers_tab :: proc(req: ^Request) {
     engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
     engine.ui_text_sized("Headers", THEME_FONT_SIZE_BODY_SM)
     engine.ui_spacer(engine.ui_px(10, 1))
-    draw_checkbox(&req.headers_bulk_edit, "Bulk edit")
+    draw_checkbox(&req.headers_bulk_edit, "Bulk edit###headers")
     // TODO: query params table
     // TODO: if bulk edit, show textarea with key=value pairs
     engine.ui_spacer(engine.ui_px(10, 1))
@@ -2098,9 +2242,6 @@ draw_ui_debug_overlay :: proc() {
         state.ui_debug_overlay_pos_initialized = true
     }
     
-    engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
-    defer engine.ui_pop_text_color()
-
     stats := engine.ui_debug_get_frame_stats()
 
     engine.ui_set_next_fixed_x(state.ui_debug_overlay_pos.x)
@@ -2482,6 +2623,12 @@ load_workspaces :: proc() {
 load_config_and_initialize_state :: proc() {
     ensure(virtual.arena_init_static(&state.collection_arena) == nil, "Failed to allocate memory")
     state.collection_allocator = virtual.arena_allocator(&state.collection_arena)
+
+    state.config.timeout_ms = TIMEOUT_DEFAULT_MS   // baseline; JSON overrides only if the key is present
+    defer {
+        s := strconv.write_int(state.timeout_buf[:], i64(state.config.timeout_ms), 10)
+        state.timeout_len = len(s)
+    }
 
     config_path, ok := get_config_path("config.json")
     if !ok {
@@ -4968,14 +5115,15 @@ main :: proc() {
             engine.ui_begin_build(window_size)
             engine.ui_text_set_default_pixel_size(16)
             engine.ui_text_set_default_font_weight(THEME_FONT_WEIGHT_BODY)
+
+            engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
+            defer engine.ui_pop_text_color()
             {
                 engine.ui_set_next_width(engine.ui_fill())
                 engine.ui_set_next_height(engine.ui_fill())
                 engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme]))
                 engine.ui_set_next_flags({.DrawBackground})
                 engine.ui_column(); {
-                    engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
-                    defer engine.ui_pop_text_color()
 
                     draw_topbar()
                     BORDER_H()
@@ -4996,6 +5144,7 @@ main :: proc() {
                 }
             }
             draw_ui_debug_overlay()
+            draw_settings_dialog()
             engine.ui_end_build()
 
             engine.ui_draw(engine.get_projection())

@@ -17,11 +17,11 @@ Next on the list:-
     - [x] Doesn't quite work properly right now.
     - [x] Should be drawn on a higher z-index (???) (not sure how this plays with overlays and dialogs)
     - [x] Hovering over something that has a tooltip will request infinite frames
-        - Fixed but broke tooltips that follow the mouse
+        - [ ] Fixed but broke tooltips that follow the mouse
 - [x] BUG: Cursor changing for the split only works if we have one split in the entire app
 - [ ] We need to be able to support changing the language even if XSetLocaleModifiers doesn't work
 - [ ] Auto focus URL field on new request tab
-- [ ] Auto scroll the tabbar to the active tab (when creating a new one) when it's out of view
+- [ ] Auto scroll the tabbar to the active tab (when creating a new one and when making it active) when it's out of view
 - [ ] Ctrl + L for focusing URL field shortcut
     - Shortcuts in general need a good system
 
@@ -37,6 +37,7 @@ Next on the list:-
     - [x] Double click to select word is broken, only selects texts before caret position.
         - [x] It also doesn't stop word selection at standard places all other text editors support.
     - [x] Caret should have a white-ish color
+    - [x] We should have a variant that just takes a strings.Builder instead of a buffer. Easier API for "infinite" text input
     - [ ] Ctrl + left/right arrows should move by word bound, just like double click selection
     - [ ] Double click to select word + hold should select words instead of individual letters
     - [ ] Triple clicking should select whole line
