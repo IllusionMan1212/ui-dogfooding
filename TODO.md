@@ -8,7 +8,7 @@ Next on the list:-
 - [x] Ability to change cursor (e.g. Hovering button, disabled button, etc..)
 - [x] Text truncation (ellipsizing)
 - [x] Scrollable areas
-    - [ ] Scrollbars should be clickable and draggable
+    - [x] Scrollbars should be clickable and draggable
 - [x] Clipping?
 - [ ] Supporting different mouse clicks
 - [ ] Tooltips
@@ -25,9 +25,16 @@ Next on the list:-
 - [ ] Ctrl + L for focusing URL field shortcut
     - Shortcuts in general need a good system
 
-- [ ] Dialog
+- UI:
+    - [ ] We have to assert or something when the stack pushes and pops don't match up. A lot of times I forget to pop something or push something too many times and styles leak.
 
-- [ ] Text input
+- [x] Dialog
+    - [ ] Text drawn in dialogs gets drawn at the default size on the first frame, then the correct size on the second+ frames.
+
+- Text renderer
+    - [ ] Anti-aliasing on the equals glyph is really bad.
+
+- [x] Text input
     - [x] When moving the mouse, sometimes the blinking of the caret takes longer (This is something to do with how we handle events I bet)
     - [-] When window loses focus we should unfocus the text input (or at the very least stop wasting cpu blinking the caret)
         - Literally doesn't matter for now
@@ -38,10 +45,11 @@ Next on the list:-
         - [x] It also doesn't stop word selection at standard places all other text editors support.
     - [x] Caret should have a white-ish color
     - [x] We should have a variant that just takes a strings.Builder instead of a buffer. Easier API for "infinite" text input
-    - [ ] Ctrl + left/right arrows should move by word bound, just like double click selection
-    - [ ] Double click to select word + hold should select words instead of individual letters
-    - [ ] Triple clicking should select whole line
-    - [ ] Triple click to select line + hold should select whole lines instead of individual letters or words
+    - [x] The selection box doesn't seem to cover the entire text from the left side when scrolling occurs due to the text overflowing the text input box.
+    - [x] Ctrl + left/right arrows should move by word bound, just like double click selection
+    - [x] Double click to select word + hold should select words instead of individual letters
+    - [x] Triple clicking should select whole line
+    - [x] Triple click to select line + hold should select whole lines instead of individual letters or words
 
 Misc:
 - [ ] We should probably somehow generate the whole ui_push_* ui_pop_* ui_set_next_* procedures as well as their nodes.

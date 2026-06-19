@@ -29,8 +29,10 @@ VERSION :: #config(VERSION, "")
 GIT_SHA :: #config(GIT_SHA, "debug")
 
 TOPBAR_HEIGHT :: 64
-TABBAR_HEIGHT :: 40
 TRANSPARENT :: 0x00000000
+TIMEOUT_MIN_MS     :: 0
+TIMEOUT_MAX_MS     :: 3600000
+TIMEOUT_DEFAULT_MS :: 5000
 
 WorkspacesSchemaVersion :: enum int {
     V0 = 0,
@@ -41,6 +43,11 @@ WorkspacesSchemaVersion :: enum int {
 CURRENT_WORKSPACES_SCHEMA_VERSION :: WorkspacesSchemaVersion.V2
 CONFIG_DIR :: "moonladder" when RELEASE_BUILD else "moonladder-dev"
 SENTRY_DSN :: "https://cab98e601501e6eb8bc4ba16edc9b07e@o4511034657144832.ingest.de.sentry.io/4511034682638416"
+
+WORKSPACE_SELECTOR_ID :: #hash("workspace_selector", "fnv32a")
+CREATE_WORKSPACE_DIALOG_ID :: #hash("create_workspace_dialog", "fnv32a")
+SETTINGS_DIALOG_ID :: #hash("settings_dialog", "fnv32a")
+ABOUT_DIALOG_ID :: #hash("about_dialog", "fnv32a")
 
 when RELEASE_BUILD {
 	#assert(GIT_SHA != "debug")
@@ -112,6 +119,11 @@ TabType :: enum {
     Request,
     Collection,
     Environment,
+}
+
+ThirdParty :: enum {
+    Curl,
+    Sentry,
 }
 
 TabItem :: union {
@@ -271,13 +283,13 @@ EnvironmentVariableField :: struct {
 
 Environment :: struct {
     id: i64,
-    name: [128]u8 `fmt:"s,"`,
+    name: [64]u8 `fmt:"s,"`,
     variables: [dynamic]EnvironmentVariableField,
 }
 
 Workspace :: struct {
     id: i64,
-    name: [128]u8 `fmt:"s,"`,
+    name: [64]u8 `fmt:"s,"`,
     collections: [dynamic]^Collection,
     environments: [dynamic]Environment,
     selected_environment_id: i64 `json:"selected_environment_id"`,
@@ -393,7 +405,7 @@ Config :: struct {
 
 State :: struct {
     config: Config,
-    tabs: [dynamic]TabItem `qt:"property=tabs,read_slot=get_tabs"`,
+    tabs: [dynamic]TabItem,
     workspaces: [dynamic]Workspace,
     active_workspace_index: int,
     active_environment: ^Environment,
@@ -407,6 +419,7 @@ State :: struct {
     // UI
     active_tab_index: int,
     action_menu_workspace_id: i64,
+    about_selected_third_party: ThirdParty,
     show_ui_debug_overlay: bool,
     ui_debug_overlay_pos: [2]f32,
     ui_debug_overlay_pos_initialized: bool,
@@ -418,15 +431,11 @@ State :: struct {
     timeout_len: int,
 }
 
-TIMEOUT_MIN_MS     :: 0
-TIMEOUT_MAX_MS     :: 3600000
-TIMEOUT_DEFAULT_MS :: 5000
-
 logger: log.Logger
 state: State
 logo: engine.TextureId
 
-SCROLLBAR_V :: proc(scroll_box: ^engine.Box) {
+SCROLLBAR_V :: #force_inline proc(scroll_box: ^engine.Box) {
     engine.ui_set_next_width(engine.ui_px(6, 1))
     engine.ui_set_next_height(engine.ui_fill())
     scrollbar := engine.ui_scrollbar_y_for(scroll_box)
@@ -463,261 +472,354 @@ draw_topbar :: proc() {
         engine.ui_set_next_width(engine.ui_children_sum(0))
         engine.ui_set_next_height(engine.ui_fill())
         engine.ui_set_next_align_y(.Center)
-        engine.ui_row(); { // Logo and name
-            engine.ui_set_next_width(engine.ui_px(30, 1))
-            engine.ui_set_next_height(engine.ui_px(30, 1))
-            engine.ui_image(logo)
-            engine.ui_spacer(engine.ui_px(10, 1))
-            engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_BODY)
-            engine.ui_text_sized("Moonladder", 14)
-        }
-
-        engine.ui_spacer(engine.ui_px(24, 1))
-
-        workspace_selector_id := engine.ui_make_id("workspace_selector")
-        workspace_selector_box: ^engine.Box
-
-        {
-            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme]))
-            engine.ui_set_next_align_y(.Center)
-            engine.ui_set_next_flags({.DrawBackground, .DrawBorder, .MouseClickable})
-            engine.ui_set_next_width(engine.ui_children_sum(1))
-            engine.ui_set_next_height(engine.ui_children_sum(1))
-            engine.ui_set_next_border_thickness(0.5)
-            engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
-            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
-            workspace_selector_box = engine.ui_row(); {
-                engine.ui_padding(6, {.Top, .Bottom})
-                engine.ui_padding(12, {.Left, .Right})
-
-                engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
-                defer engine.ui_pop_text_color()
-                engine.ui_text_sized(string(cstring(&state.workspaces[state.active_workspace_index].name[0])), 14)
-                engine.ui_spacer(engine.ui_px(12, 1))
-                engine.ui_text_sized(ICONS[.Chevron], 16)
-            }
-            sig := engine.ui_signal_from_box(workspace_selector_box)
-
-            if engine.ui_hovering(sig) {
-                engine.set_cursor(.HAND)
-                workspace_selector_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
-            }
-
-            if engine.ui_clicked(sig) {
-                engine.ui_popup_open(workspace_selector_id)
-            }
-        }
-
-        // Workspace selector popup
-        {
-            min_width := f32(200)
-            engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
-            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
-            engine.ui_set_next_border_thickness(0.5)
-            engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
-            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
-            if engine.ui_popup_begin(workspace_selector_id, workspace_selector_box) {
-                engine.ui_set_next_width(engine.ui_px(225, 1))
+        engine.ui_row(); {
+            {
+                engine.ui_set_next_width(engine.ui_children_sum(1))
                 engine.ui_set_next_height(engine.ui_children_sum(1))
-                engine.ui_set_next_align_x(.Center)
-                engine.ui_column(); {
-                    engine.ui_padding(THEME_SPACING_SM, {.Top, .Bottom, .Left, .Right})
+                engine.ui_set_next_align_y(.Center)
+                engine.ui_set_next_flags({.MouseClickable})
+                about_box := engine.ui_row(engine.ui_make_id("logo_and_name")); {
+                    engine.ui_set_next_width(engine.ui_px(30, 1))
+                    engine.ui_set_next_height(engine.ui_px(30, 1))
+                    engine.ui_image(logo)
+                    engine.ui_spacer(engine.ui_px(10, 1))
+                    engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_BODY)
+                    engine.ui_text_sized("Moonladder", 14)
+                }
+                about_sig := engine.ui_signal_from_box(about_box)
 
-                    for &workspace, i in state.workspaces {
-                        if i != 0 {
-                            engine.ui_spacer(engine.ui_px(6, 1))
-                        }
+                if engine.ui_hovering(about_sig) {
+                    engine.set_cursor(.HAND)
+                }
 
-                        name := string(cstring(&workspace.name[0]))
-                        is_active := i == state.active_workspace_index
-                        is_menu_open := state.action_menu_workspace_id == workspace.id
+                if engine.ui_clicked(about_sig) {
+                    engine.ui_dialog_open(ABOUT_DIALOG_ID)
+                }
+            }
 
-                        engine.ui_set_next_width(engine.ui_fill())
-                        engine.ui_set_next_height(engine.ui_children_sum(1))
-                        engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
-                        engine.ui_set_next_align_y(.Center)
-                        engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+            engine.ui_spacer(engine.ui_px(24, 1))
 
-                        id := engine.ui_make_id(fmt.tprintf("workspace_%d", workspace.id))
+            workspace_selector_box: ^engine.Box
 
-                        item_box := engine.ui_row(id); {
-                            item_sig := engine.ui_signal_from_box(item_box)
+            {
+                engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme]))
+                engine.ui_set_next_align_y(.Center)
+                engine.ui_set_next_flags({.DrawBackground, .DrawBorder, .MouseClickable})
+                engine.ui_set_next_width(engine.ui_children_sum(1))
+                engine.ui_set_next_height(engine.ui_children_sum(1))
+                engine.ui_set_next_border_thickness(0.5)
+                engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                workspace_selector_box = engine.ui_row(); {
+                    engine.ui_padding(6, {.Top, .Bottom})
+                    engine.ui_padding(12, {.Left, .Right})
 
-                            if engine.ui_hovering(item_sig) {
-                                engine.set_cursor(.HAND)
-                                item_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
-                            } else {
-                                item_box.background_color = TRANSPARENT
+                    engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                    defer engine.ui_pop_text_color()
+                    engine.ui_text_sized(string(cstring(&state.workspaces[state.active_workspace_index].name[0])), 14)
+                    engine.ui_spacer(engine.ui_px(12, 1))
+                    engine.ui_text_sized(ICONS[.Chevron], 16)
+                }
+                sig := engine.ui_signal_from_box(workspace_selector_box)
+
+                if engine.ui_hovering(sig) {
+                    engine.set_cursor(.HAND)
+                    workspace_selector_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+                }
+
+                if engine.ui_clicked(sig) {
+                    engine.ui_popup_open(WORKSPACE_SELECTOR_ID)
+                }
+            }
+
+            // Workspace selector popup
+            {
+                min_width := f32(200)
+                engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
+                engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+                engine.ui_set_next_border_thickness(0.5)
+                engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                if engine.ui_popup_begin(WORKSPACE_SELECTOR_ID, workspace_selector_box) {
+                    engine.ui_set_next_width(engine.ui_px(225, 1))
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_set_next_align_x(.Center)
+                    engine.ui_column(); {
+                        engine.ui_padding(THEME_SPACING_SM, {.Top, .Bottom, .Left, .Right})
+
+                        for &workspace, i in state.workspaces {
+                            if i != 0 {
+                                engine.ui_spacer(engine.ui_px(6, 1))
                             }
 
-                            engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
-                            engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
+                            name := string(cstring(&workspace.name[0]))
+                            is_active := i == state.active_workspace_index
+                            is_menu_open := state.action_menu_workspace_id == workspace.id
 
-                            engine.ui_push_text_color(engine.color_hex_rgb(is_active ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
-                            if i == 0 {
-                                engine.ui_text(ICONS[.Lock])
-                            } else {
-                                engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
-                            }
+                            engine.ui_set_next_width(engine.ui_fill())
+                            engine.ui_set_next_height(engine.ui_children_sum(1))
+                            engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+                            engine.ui_set_next_align_y(.Center)
+                            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
 
-                            engine.ui_spacer(engine.ui_px(12, 1))
+                            id := engine.ui_make_id(fmt.tprintf("workspace_%d", workspace.id))
 
-                            engine.ui_set_next_font_size(14)
-                            engine.ui_text(name)
+                            item_box := engine.ui_row(id); {
+                                item_sig := engine.ui_signal_from_box(item_box)
 
-                            engine.ui_pop_text_color()
-
-                            if is_active && !engine.ui_hovering(item_sig) && !is_menu_open {
-                                engine.ui_spacer(engine.ui_fill())
-                                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]))
-                                engine.ui_text_sized(ICONS[.Check], 16)
-                            }
-
-                            if engine.ui_hovering(item_sig) || is_menu_open {
-                                engine.ui_spacer(engine.ui_fill())
-                                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
-                                engine.ui_set_next_flags({.MouseClickable})
-                                actions_box := engine.ui_text_sized(fmt.tprintf("%v###workspace_icon_%v", ICONS[.ThreeDots], workspace.id), 12)
-                                sig := engine.ui_signal_from_box(actions_box)
-
-                                if engine.ui_hovering(sig) {
+                                if engine.ui_hovering(item_sig) {
                                     engine.set_cursor(.HAND)
-                                    actions_box.text_color = engine.color_hex_rgb(THEME_TEXT_SECONDARY_HOVER[state.config.theme])
-
-                                    engine.ui_set_next_font_size(THEME_FONT_SIZE_LABEL)
-                                    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
-                                    engine.ui_set_next_border_thickness(0.5)
-                                    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
-                                    engine.ui_tooltip_text("Workspace Actions", target = actions_box)
+                                    item_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+                                } else {
+                                    item_box.background_color = TRANSPARENT
                                 }
 
-                                if engine.ui_clicked(sig) {
-                                    if is_menu_open {
-                                        state.action_menu_workspace_id = 0
-                                    } else {
-                                        state.action_menu_workspace_id = workspace.id
+                                engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
+                                engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
+
+                                engine.ui_push_text_color(engine.color_hex_rgb(is_active ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                                if i == 0 {
+                                    engine.ui_text(ICONS[.Lock])
+                                } else {
+                                    engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+                                }
+
+                                engine.ui_spacer(engine.ui_px(12, 1))
+
+                                {
+                                    engine.ui_set_next_width(engine.ui_fill())
+                                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                                    engine.ui_set_next_align_y(.Center)
+                                    engine.ui_row(); {
+                                        engine.ui_set_next_font_size(14)
+                                        engine.ui_text_shrinkable(name)
+                                        engine.ui_pop_text_color()
+                                    }
+                                }
+
+                                if is_active && !engine.ui_hovering(item_sig) && !is_menu_open {
+                                    engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+                                    engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]))
+                                    engine.ui_text_sized(ICONS[.Check], 16)
+                                }
+
+                                if engine.ui_hovering(item_sig) || is_menu_open {
+                                    engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+                                    engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                                    engine.ui_set_next_flags({.MouseClickable})
+                                    actions_box := engine.ui_text_sized(fmt.tprintf("%v###workspace_icon_%v", ICONS[.ThreeDots], workspace.id), 12)
+                                    sig := engine.ui_signal_from_box(actions_box)
+
+                                    if engine.ui_hovering(sig) {
+                                        engine.set_cursor(.HAND)
+                                        actions_box.text_color = engine.color_hex_rgb(THEME_TEXT_SECONDARY_HOVER[state.config.theme])
+
+                                        engine.ui_set_next_font_size(THEME_FONT_SIZE_LABEL)
+                                        engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+                                        engine.ui_set_next_border_thickness(0.5)
+                                        engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+                                        engine.ui_tooltip_text("Workspace Actions", target = actions_box)
+                                    }
+
+                                    if engine.ui_clicked(sig) {
+                                        if is_menu_open {
+                                            state.action_menu_workspace_id = 0
+                                        } else {
+                                            state.action_menu_workspace_id = workspace.id
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        if engine.ui_clicked(engine.ui_signal_from_box(item_box)) && !is_active {
-                            state.active_workspace_index = i
-                            state.action_menu_workspace_id = 0
-                            engine.ui_popup_close()
-                            save_workspaces()
-                        }
+                            if engine.ui_clicked(engine.ui_signal_from_box(item_box)) && !is_active {
+                                state.active_workspace_index = i
+                                state.action_menu_workspace_id = 0
+                                engine.ui_popup_close()
+                                save_workspaces()
+                            }
 
-                        if is_menu_open {
-                            menu_id := engine.ui_make_id(fmt.tprintf("workspace_menu_%d", workspace.id))
-                            if menu_box := engine.ui_floating_menu_begin(item_box, menu_id, 100); menu_box != nil {
-                                menu_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme])
-                                menu_box.border_color = engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme])
-                                menu_box.border_thickness = 0.5
-                                menu_box.border_radius = THEME_BORDER_RADIUS_MD
+                            if is_menu_open {
+                                menu_id := engine.ui_make_id(fmt.tprintf("workspace_menu_%d", workspace.id))
+                                if menu_box := engine.ui_floating_menu_begin(item_box, menu_id, 100); menu_box != nil {
+                                    menu_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme])
+                                    menu_box.border_color = engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme])
+                                    menu_box.border_thickness = 0.5
+                                    menu_box.border_radius = THEME_BORDER_RADIUS_MD
 
-                                engine.ui_set_next_height(engine.ui_children_sum(1))
-                                engine.ui_set_next_width(engine.ui_fill())
-                                engine.ui_column(); {
-                                    engine.ui_padding(THEME_SPACING_SM, {.Left, .Right, .Top, .Bottom})
-                                    {
-                                        rename_id := engine.ui_make_id(fmt.tprintf("workspace_rename_%d", workspace.id))
-                                        engine.ui_set_next_width(engine.ui_fill())
-                                        engine.ui_set_next_height(engine.ui_children_sum(1))
-                                        engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
-                                        engine.ui_set_next_align_y(.Center)
-                                        engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
-                                        rename_box := engine.ui_row(rename_id); {
-                                            rename_sig := engine.ui_signal_from_box(rename_box)
-                                            if engine.ui_hovering(rename_sig) {
-                                                engine.set_cursor(.HAND)
-                                                rename_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
-                                            } else {
-                                                rename_box.background_color = TRANSPARENT
+                                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                                    engine.ui_set_next_width(engine.ui_fill())
+                                    engine.ui_column(); {
+                                        engine.ui_padding(THEME_SPACING_SM, {.Left, .Right, .Top, .Bottom})
+                                        {
+                                            rename_id := engine.ui_make_id(fmt.tprintf("workspace_rename_%d", workspace.id))
+                                            engine.ui_set_next_width(engine.ui_fill())
+                                            engine.ui_set_next_height(engine.ui_children_sum(1))
+                                            engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+                                            engine.ui_set_next_align_y(.Center)
+                                            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                                            rename_box := engine.ui_row(rename_id); {
+                                                rename_sig := engine.ui_signal_from_box(rename_box)
+                                                if engine.ui_hovering(rename_sig) {
+                                                    engine.set_cursor(.HAND)
+                                                    rename_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+                                                } else {
+                                                    rename_box.background_color = TRANSPARENT
+                                                }
+                                                engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
+                                                engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
+                                                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                                                engine.ui_set_next_font_size(14)
+                                                engine.ui_text("Rename")
                                             }
-                                            engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
-                                            engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
-                                            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
-                                            engine.ui_set_next_font_size(14)
-                                            engine.ui_text("Rename")
-                                        }
-                                        if engine.ui_clicked(engine.ui_signal_from_box(rename_box)) {
-                                            state.action_menu_workspace_id = 0
-                                            engine.ui_popup_close()
-                                            fmt.println("TODO: rename workspace", name)
+                                            if engine.ui_clicked(engine.ui_signal_from_box(rename_box)) {
+                                                state.action_menu_workspace_id = 0
+                                                engine.ui_popup_close()
+                                                fmt.println("TODO: rename workspace", name)
+                                            }
+
                                         }
 
+                                        if i != 0 {
+                                            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+
+                                            delete_id := engine.ui_make_id(fmt.tprintf("workspace_delete_%d", workspace.id))
+                                            engine.ui_set_next_width(engine.ui_fill())
+                                            engine.ui_set_next_height(engine.ui_children_sum(1))
+                                            engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+                                            engine.ui_set_next_align_y(.Center)
+                                            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                                            delete_box := engine.ui_row(delete_id); {
+                                                delete_sig := engine.ui_signal_from_box(delete_box)
+                                                if engine.ui_hovering(delete_sig) {
+                                                    engine.set_cursor(.HAND)
+                                                    delete_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+                                                } else {
+                                                    delete_box.background_color = TRANSPARENT
+                                                }
+                                                engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
+                                                engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
+                                                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_ERROR_DEFAULT[state.config.theme]))
+                                                engine.ui_set_next_font_size(14)
+                                                engine.ui_text("Delete")
+                                            }
+                                            if engine.ui_clicked(engine.ui_signal_from_box(delete_box)) {
+                                                state.action_menu_workspace_id = 0
+                                                engine.ui_popup_close()
+                                                fmt.println("TODO: delete workspace", name)
+                                            }
+                                        }
                                     }
 
-                                    if i != 0 {
-                                        engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
-
-                                        delete_id := engine.ui_make_id(fmt.tprintf("workspace_delete_%d", workspace.id))
-                                        engine.ui_set_next_width(engine.ui_fill())
-                                        engine.ui_set_next_height(engine.ui_children_sum(1))
-                                        engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
-                                        engine.ui_set_next_align_y(.Center)
-                                        engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
-                                        delete_box := engine.ui_row(delete_id); {
-                                            delete_sig := engine.ui_signal_from_box(delete_box)
-                                            if engine.ui_hovering(delete_sig) {
-                                                engine.set_cursor(.HAND)
-                                                delete_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
-                                            } else {
-                                                delete_box.background_color = TRANSPARENT
-                                            }
-                                            engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
-                                            engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
-                                            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_ERROR_DEFAULT[state.config.theme]))
-                                            engine.ui_set_next_font_size(14)
-                                            engine.ui_text("Delete")
-                                        }
-                                        if engine.ui_clicked(engine.ui_signal_from_box(delete_box)) {
-                                            state.action_menu_workspace_id = 0
-                                            engine.ui_popup_close()
-                                            fmt.println("TODO: delete workspace", name)
-                                        }
-                                    }
+                                    engine.ui_floating_menu_end()
                                 }
-
-                                engine.ui_floating_menu_end()
                             }
                         }
                     }
+
+                    engine.ui_spacer(engine.ui_px(6, 1))
+
+                    if draw_button("Create Workspace", variant = .LinkColored, size = .Small, left_icon = .Plus) {
+                        engine.ui_dialog_open(CREATE_WORKSPACE_DIALOG_ID)
+                    }
+
+                    engine.ui_popup_end()
                 }
 
-                engine.ui_spacer(engine.ui_px(6, 1))
 
-                if draw_button("Create Workspace", variant = .LinkColored, size = .Small, left_icon = .Plus) {
-                    // TODO: open workspace creation dialog
-                }
-
-                engine.ui_popup_end()
+                engine.ui_pop_pref_height()
             }
 
-
-            engine.ui_pop_pref_height()
-        }
-
-        engine.ui_spacer(engine.ui_percent(1, 0.05))
-        if draw_icon_button(.Settings, engine.color_hex_rgb(THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .ExtraSmall, variant = .SecondaryGrey, tooltip_text = "Settings") {
-            id := engine.ui_make_id("settings_dialog")
-            engine.ui_dialog_open(id)
+            engine.ui_spacer(engine.ui_percent(1, 0.05))
+            if draw_icon_button(.Settings, engine.color_hex_rgb(THEME_ICON_SECONDARY_DEFAULT[state.config.theme]), size = .ExtraSmall, variant = .SecondaryGrey, tooltip_text = "Settings") {
+                engine.ui_dialog_open(SETTINGS_DIALOG_ID)
+            }
         }
     }
 }
 
 draw_settings_dialog :: proc() {
-    DIALOG_WIDTH :: 400
+    draw_dialog(SETTINGS_DIALOG_ID, draw_content = proc() {
+        engine.ui_text_sized("Settings", THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+        {
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+            engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+            engine.ui_set_next_border_thickness(0.5)
+            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+            engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
+            engine.ui_column(); {
+                engine.ui_padding(THEME_SPACING_MD, {.Top, .Bottom, .Left, .Right})
+
+                {
+                    engine.ui_set_next_width(engine.ui_fill())
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_set_next_align_y(.Center)
+                    engine.ui_row(); {
+                        engine.ui_text("Theme")
+                        engine.ui_spacer(engine.ui_fill())
+                        if draw_button(state.config.theme == .Dark ? "Switch to Light Mode" : "Switch to Dark Mode", size = .Small) {
+                            state.config.theme = state.config.theme == .Dark ? .Light : .Dark
+                        }
+                    }
+                }
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+                {
+                    engine.ui_set_next_width(engine.ui_fill())
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_set_next_align_y(.Center)
+                    engine.ui_row(); {
+                        engine.ui_text("Request Timeout (ms)")
+                        engine.ui_spacer(engine.ui_fill())
+                        engine.ui_set_next_width(engine.ui_px(100, 1))
+                        input_result := draw_text_input(
+                            "request_timeout_input",
+                            state.timeout_buf[:], &state.timeout_len,
+                            options = engine.TextInputOptions{filter = proc(r: rune) -> bool { return r >= '0' && r <= '9' }},
+                        )
+
+                        if input_result.focus_lost || input_result.submitted {
+                            v, ok := strconv.parse_int(string(state.timeout_buf[:state.timeout_len]))
+                            if !ok { v = state.config.timeout_ms }         // empty/invalid field -> keep current value
+                            v = clamp(v, TIMEOUT_MIN_MS, TIMEOUT_MAX_MS)
+                            state.config.timeout_ms = v
+                            s := strconv.write_int(state.timeout_buf[:], i64(v), 10)    // re-format -> canonical clamped display
+                            state.timeout_len = len(s)
+
+                            save_config()
+                        }
+                    }
+                }
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+                {
+                    engine.ui_set_next_width(engine.ui_fill())
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_set_next_align_y(.Center)
+                    engine.ui_row(); {
+                        engine.ui_text("Follow Redirects")
+                        engine.ui_spacer(engine.ui_fill())
+                        if draw_checkbox(&state.config.follow_redirects, "###follow_redirects") {
+                            save_config()
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+draw_dialog :: proc(id: engine.Id, width: f32 = 400, x: f32 = -1, y: f32 = 150, draw_content: proc()) {
+    x := x
     win := engine.get_window_size()
-    engine.ui_set_next_fixed_x((win.x - DIALOG_WIDTH) * 0.5)
-    engine.ui_set_next_fixed_y(150)
-    id := engine.ui_make_id("settings_dialog")
-    if engine.ui_dialog_begin(id) {
+    if x == -1 {
+        x = (win.x - width) * 0.5
+    }
+    if engine.ui_dialog_begin(id, x, y) {
         defer engine.ui_dialog_end()
 
-        // The dialog box is invisible; the inner column carries the size and styling.
-        engine.ui_set_next_width(engine.ui_px(DIALOG_WIDTH, 1))
+        engine.ui_set_next_width(engine.ui_px(width, 1))
         engine.ui_set_next_height(engine.ui_children_sum(1))
         engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_LG)
         engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
@@ -725,113 +827,182 @@ draw_settings_dialog :: proc() {
         engine.ui_column(); {
             engine.ui_padding(24, {.Top, .Bottom, .Left, .Right})
 
-            engine.ui_text_sized("Settings", THEME_FONT_SIZE_BODY_LG)
-            engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+            draw_content()
+        }
+    }
+}
 
-            {
+create_workspace :: proc(workspace_name: string) {
+    workspace := Workspace{id = rand.int63(), selected_environment_id = -1}
+    copy(workspace.name[:], workspace_name)
+
+    append(&state.workspaces, workspace)
+
+    save_workspaces()
+}
+
+draw_create_workspace_dialog :: proc() {
+    @static workspace_name_buf: [64]u8
+    @static workspace_name_len: int
+
+    draw_dialog(CREATE_WORKSPACE_DIALOG_ID, draw_content = proc() {
+        engine.ui_text_sized("Create Workspace", THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        result := draw_text_input("create_workspace_name_input", workspace_name_buf[:], &workspace_name_len, .Medium, engine.TextInputOptions{placeholder = "Workspace name"})
+        if result.submitted {
+            workspace_name := strings.trim_space(string(workspace_name_buf[:workspace_name_len]))
+
+            create_workspace(workspace_name)
+
+            workspace_name_buf = {}
+            workspace_name_len = 0
+            engine.ui_dialog_close()
+        }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        if draw_button("Create", enabled = strings.trim_space(string(workspace_name_buf[:workspace_name_len])) != "") {
+            workspace_name := strings.trim_space(string(workspace_name_buf[:workspace_name_len]))
+
+            create_workspace(workspace_name)
+
+            workspace_name_buf = {}
+            workspace_name_len = 0
+            engine.ui_dialog_close()
+        }
+    })
+}
+
+draw_about_dialog :: proc() {
+    draw_dialog(ABOUT_DIALOG_ID, 520, y = 96, draw_content = proc() {
+        engine.ui_text_sized("Moonladder", THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+        engine.ui_text("A fast, native API client.")
+
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        BORDER_H()
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+        {
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_align_y(.Center)
+            engine.ui_row(); {
+                engine.ui_set_next_width(engine.ui_px(72, 1))
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+                engine.ui_text_sized("Version", THEME_FONT_SIZE_BODY_SM)
+                version_text_width := engine.ui_text_measure_string("Version", THEME_FONT_SIZE_BODY_SM).x
+                engine.ui_spacer(engine.ui_px(72 - version_text_width, 1))
+                engine.ui_text_sized(VERSION when RELEASE_BUILD else "debug", THEME_FONT_SIZE_BODY_SM)
+            }
+        }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        {
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_align_y(.Center)
+            engine.ui_row(); {
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+                engine.ui_text_sized("Git SHA", THEME_FONT_SIZE_BODY_SM)
+                git_sha_text_width := engine.ui_text_measure_string("Git SHA", THEME_FONT_SIZE_BODY_SM).x
+                engine.ui_spacer(engine.ui_px(72 - git_sha_text_width, 1))
+                engine.ui_text_sized(GIT_SHA, THEME_FONT_SIZE_BODY_SM)
+            }
+        }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        {
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme]))
+            engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+            engine.ui_set_next_border_thickness(0.5)
+            engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
+            engine.ui_column(); {
+                engine.ui_padding(12, {.Left, .Right, .Top, .Bottom})
+
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                engine.ui_text_sized("Links", THEME_FONT_SIZE_BODY_SM)
+
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+
                 engine.ui_set_next_width(engine.ui_fill())
                 engine.ui_set_next_height(engine.ui_children_sum(1))
-                engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
-                engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
-                engine.ui_set_next_border_thickness(0.5)
-                engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
-                engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
-                engine.ui_column(); {
-                    engine.ui_padding(THEME_SPACING_MD, {.Top, .Bottom, .Left, .Right})
-
-                    {
-                        engine.ui_set_next_width(engine.ui_fill())
-                        engine.ui_set_next_height(engine.ui_children_sum(1))
-                        engine.ui_set_next_align_y(.Center)
-                        engine.ui_row(); {
-                            engine.ui_text("Theme")
-                            engine.ui_spacer(engine.ui_fill())
-                            if draw_button(state.config.theme == .Dark ? "Switch to Light Mode" : "Switch to Dark Mode", size = .Small) {
-                                state.config.theme = state.config.theme == .Dark ? .Light : .Dark
-                            }
-                        }
+                engine.ui_row(); {
+                    if draw_button("Website", .LinkColored, .Small) {
+                        engine.open_url("https://moonladder.net/")
                     }
                     engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
-                    {
-                        engine.ui_set_next_width(engine.ui_fill())
-                        engine.ui_set_next_height(engine.ui_children_sum(1))
-                        engine.ui_set_next_align_y(.Center)
-                        engine.ui_row(); {
-                            engine.ui_text("Request Timeout (ms)")
-                            engine.ui_spacer(engine.ui_fill())
-                            engine.ui_set_next_width(engine.ui_px(100, 1))
-                            engine.ui_set_next_height(engine.ui_px(36, 1))
-                            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
-                            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
-                            engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
-                            engine.ui_set_next_border_thickness(0.5)
-                            engine.ui_set_next_flags({.MouseClickable, .DrawBackground, .DrawBorder})
-                            text_input_box := engine.ui_row(); {
-                                engine.ui_padding(10, {.Left, .Right})
-                                engine.ui_padding(8, {.Top, .Bottom})
-                                engine.ui_set_next_width(engine.ui_fill())
-                                engine.ui_set_next_height(engine.ui_fill())
-                                engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
-
-                                text_input_sig := engine.ui_signal_from_box(text_input_box)
-                                text_input_id := engine.ui_make_id("request_timeout_input")
-
-                                if engine.ui_clicked(text_input_sig) {
-                                    engine.ui_focus_text_input(text_input_id)
-                                }
-                                if engine.ui_hovering(text_input_sig) {
-                                    engine.set_cursor(.IBEAM)
-                                }
-
-                                input_result := engine.ui_text_input(
-                                    text_input_id,
-                                    state.timeout_buf[:], &state.timeout_len,
-                                    engine.TextInputOptions{filter = proc(r: rune) -> bool { return r >= '0' && r <= '9' }},
-                                )
-
-                                if input_result.boxes.caret != nil {
-                                    input_result.boxes.caret.background_color = engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme])
-                                }
-
-                                if input_result.focused {
-                                    text_input_box.border_color = engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT)
-                                    text_input_box.border_thickness = 1.5
-                                }
-
-                                if input_result.boxes.selection != nil {
-                                    input_result.boxes.selection.background_color = engine.color_hex_rgb(THEME_SELECTION_DEFAULT[state.config.theme])
-                                }
-
-                                if input_result.focus_lost || input_result.submitted {
-                                    v, ok := strconv.parse_int(string(state.timeout_buf[:state.timeout_len]))
-                                    if !ok { v = state.config.timeout_ms }         // empty/invalid field -> keep current value
-                                    v = clamp(v, TIMEOUT_MIN_MS, TIMEOUT_MAX_MS)
-                                    state.config.timeout_ms = v
-                                    s := strconv.write_int(state.timeout_buf[:], i64(v), 10)    // re-format -> canonical clamped display
-                                    state.timeout_len = len(s)
-
-                                    save_config()
-                                }
-                            }
-                        }
-                    }
-                    engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
-                    {
-                        engine.ui_set_next_width(engine.ui_fill())
-                        engine.ui_set_next_height(engine.ui_children_sum(1))
-                        engine.ui_set_next_align_y(.Center)
-                        engine.ui_row(); {
-                            engine.ui_text("Follow Redirects")
-                            engine.ui_spacer(engine.ui_fill())
-                            if draw_checkbox(&state.config.follow_redirects, "###follow_redirects") {
-                                save_config()
-                            }
-                        }
+                    if draw_button("Bug Tracker", .LinkColored, .Small) {
+                        engine.open_url("https://github.com/illusionman1212/moonladder-issues")
                     }
                 }
             }
         }
-    }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        {
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme]))
+            engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+            engine.ui_set_next_border_thickness(0.5)
+            engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
+            engine.ui_column(); {
+                engine.ui_padding(12, {.Left, .Right, .Top, .Bottom})
+
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                engine.ui_text_sized("Third-party attributions", THEME_FONT_SIZE_BODY_SM)
+
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+                {
+                    engine.ui_set_next_width(engine.ui_fill())
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_row(); {
+                        if draw_button("libcurl", .SecondaryColored if state.about_selected_third_party == .Curl else .SecondaryGrey, .Small) {
+                            state.about_selected_third_party = .Curl
+                        }
+                        engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+                        if draw_button("sentry-native", .SecondaryColored if state.about_selected_third_party == .Sentry else .SecondaryGrey, .Small) {
+                            state.about_selected_third_party = .Sentry
+                        }
+                    }
+                }
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+
+                switch state.about_selected_third_party {
+                case .Curl:
+                    engine.ui_text_sized("libcurl is distributed under the curl license.", THEME_FONT_SIZE_BODY_SM)
+                    engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+                    if draw_button("libcurl License", .LinkColored, .Small) {
+                        engine.open_url("https://curl.se/docs/copyright.html")
+                    }
+                case .Sentry:
+                    engine.ui_text_sized("sentry-native is distributed under the MIT license.", THEME_FONT_SIZE_BODY_SM)
+                    engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+                    if draw_button("sentry-native License", .LinkColored, .Small) {
+                        engine.open_url("https://github.com/getsentry/sentry-native/blob/master/LICENSE")
+                    }
+                }
+            }
+        }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        {
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_align_y(.Center)
+            engine.ui_row(); {
+                if draw_button("Close", .LinkGrey) {
+                    engine.ui_dialog_close()
+                }
+                engine.ui_spacer(engine.ui_fill())
+                if draw_button("Report Bug", .Primary, .Small) {
+                    engine.open_url("https://github.com/illusionman1212/moonladder-issues/issues/new?template=bug_report.md")
+                }
+            }
+        }
+    })
 }
 
 @require_results
@@ -1773,6 +1944,7 @@ draw_main_area :: proc() {
     }
 }
 
+// label is used to generate a unique id for the checkbox
 draw_checkbox :: proc(checked: ^bool, label: string) -> bool {
     display_str := engine.ui_display_part_from_key_string(label)
     id_seed := hash.fnv32a(transmute([]byte)engine.ui_hash_part_from_key_string(label))
@@ -1882,7 +2054,67 @@ draw_radio_button :: proc(label: string, selected: bool) -> bool {
     }
 
     sig := engine.ui_signal_from_box(box)
+
+    if engine.ui_hovering(sig) {
+        engine.set_cursor(.HAND)
+    }
+
     return engine.ui_clicked(sig)
+}
+
+// Stylized single-line text input used across the app (e.g. settings fields).
+// The URL bar is a separate, specialized widget (see draw_url_text_input).
+// Size the input from the call site with ui_set_next_width/height or
+// ui_push_pref_width/height before calling.
+draw_text_input :: proc(
+    id_str: string,
+    buf: []byte,
+    text_len: ^int,
+    size := TextInputSize.Medium,
+    options := engine.TextInputOptions{},
+    caller := #caller_location,
+) -> engine.TextInputResult {
+    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+    engine.ui_set_next_border_thickness(0.5)
+    engine.ui_set_next_flags({.MouseClickable, .DrawBackground, .DrawBorder})
+    engine.ui_set_next_height(engine.ui_px(44 if size == .Large else 36, 1))
+    text_input_box := engine.ui_row(caller = caller); {
+        engine.ui_padding(10, {.Left, .Right})
+        engine.ui_padding(8, {.Top, .Bottom})
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_fill())
+        engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
+
+        text_input_sig := engine.ui_signal_from_box(text_input_box)
+        text_input_id := engine.ui_make_id(id_str)
+
+        if engine.ui_clicked(text_input_sig) {
+            engine.ui_focus_text_input(text_input_id)
+        }
+        if engine.ui_hovering(text_input_sig) {
+            engine.set_cursor(.IBEAM)
+        }
+
+        input_result := engine.ui_text_input(text_input_id, buf, text_len, options)
+
+        if input_result.boxes.caret != nil {
+            input_result.boxes.caret.background_color = engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme])
+        }
+        if input_result.focused {
+            text_input_box.border_color = engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT)
+            text_input_box.border_thickness = 1.5
+        }
+        if input_result.boxes.selection != nil {
+            input_result.boxes.selection.background_color = engine.color_hex_rgb(THEME_SELECTION_DEFAULT[state.config.theme])
+        }
+        if input_result.boxes.placeholder != nil {
+            input_result.boxes.placeholder.text_color = engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme])
+        }
+
+        return input_result
+    }
 }
 
 draw_url_text_input :: proc(req: ^Request) {
@@ -2064,6 +2296,8 @@ draw_request_headers_tab :: proc(req: ^Request) {
 }
 
 draw_request_main_area :: proc(req: ^Request) {
+    TABBAR_HEIGHT :: 40
+
     available_height := engine.get_window_size().y - TABBAR_HEIGHT - TOPBAR_HEIGHT - 1
     req.height = req.height == 0 ? f32(available_height / 2) : req.height
 
@@ -3156,8 +3390,8 @@ workspace_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) -
             case i64:
                 id := ((cast(^i64)(data))^)
                 io.write_i64(w, id) or_return
-            case [128]u8:
-                cstr := ((cast(^[128]u8)(data))^)
+            case [64]u8:
+                cstr := ((cast(^[64]u8)(data))^)
                 str := strings.clone_from_cstring(cstring(&cstr[0]))
                 defer delete(str)
                 io.write_quoted_string(w, str) or_return
@@ -3323,8 +3557,8 @@ environment_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options)
             case i64:
                 id := ((cast(^i64)(data))^)
                 io.write_i64(w, id) or_return
-            case [128]u8:
-                cstr := ((cast(^[128]u8)(data))^)
+            case [64]u8:
+                cstr := ((cast(^[64]u8)(data))^)
                 str := strings.clone_from_cstring(cstring(&cstr[0]))
                 defer delete(str)
                 io.write_quoted_string(w, str) or_return
@@ -5145,6 +5379,8 @@ main :: proc() {
             }
             draw_ui_debug_overlay()
             draw_settings_dialog()
+            draw_create_workspace_dialog()
+            draw_about_dialog()
             engine.ui_end_build()
 
             engine.ui_draw(engine.get_projection())
