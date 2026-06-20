@@ -45,7 +45,11 @@ CONFIG_DIR :: "moonladder" when RELEASE_BUILD else "moonladder-dev"
 SENTRY_DSN :: "https://cab98e601501e6eb8bc4ba16edc9b07e@o4511034657144832.ingest.de.sentry.io/4511034682638416"
 
 WORKSPACE_SELECTOR_ID :: #hash("workspace_selector", "fnv32a")
-CREATE_WORKSPACE_DIALOG_ID :: #hash("create_workspace_dialog", "fnv32a")
+WORKSPACE_CREATE_DIALOG_ID :: #hash("create_workspace_dialog", "fnv32a")
+WORKSPACE_CREATE_NAME_INPUT_ID :: #hash("create_workspace_name_input", "fnv32a")
+WORKSPACE_RENAME_DIALOG_ID :: #hash("rename_workspace_dialog", "fnv32a")
+WORKSPACE_RENAME_NAME_INPUT_ID :: #hash("rename_workspace_name_input", "fnv32a")
+WORKSPACE_DELETE_DIALOG_ID :: #hash("delete_workspace_dialog", "fnv32a")
 SETTINGS_DIALOG_ID :: #hash("settings_dialog", "fnv32a")
 ABOUT_DIALOG_ID :: #hash("about_dialog", "fnv32a")
 
@@ -429,6 +433,13 @@ State :: struct {
 
     timeout_buf: [8]u8,
     timeout_len: int,
+
+    // Workspace creation/rename dialog state
+    workspace_name_buf: [64]u8,
+    workspace_name_len: int,
+
+    // Workspace rename/delete dialog state
+    workspace_target_idx: int,
 }
 
 logger: log.Logger
@@ -674,7 +685,13 @@ draw_topbar :: proc() {
                                             if engine.ui_clicked(engine.ui_signal_from_box(rename_box)) {
                                                 state.action_menu_workspace_id = 0
                                                 engine.ui_popup_close()
-                                                fmt.println("TODO: rename workspace", name)
+                                                mem.zero_item(&state.workspace_name_buf)
+                                                copy(state.workspace_name_buf[:], workspace.name[:])
+                                                state.workspace_name_len = len(string(cstring(&workspace.name[0])))
+                                                engine.ui_dialog_open(WORKSPACE_RENAME_DIALOG_ID)
+                                                engine.ui_focus_text_input(WORKSPACE_RENAME_NAME_INPUT_ID)
+                                                engine.ui_text_input_select_all(WORKSPACE_RENAME_NAME_INPUT_ID)
+                                                state.workspace_target_idx = i
                                             }
 
                                         }
@@ -705,7 +722,8 @@ draw_topbar :: proc() {
                                             if engine.ui_clicked(engine.ui_signal_from_box(delete_box)) {
                                                 state.action_menu_workspace_id = 0
                                                 engine.ui_popup_close()
-                                                fmt.println("TODO: delete workspace", name)
+                                                engine.ui_dialog_open(WORKSPACE_DELETE_DIALOG_ID)
+                                                state.workspace_target_idx = i
                                             }
                                         }
                                     }
@@ -719,7 +737,10 @@ draw_topbar :: proc() {
                     engine.ui_spacer(engine.ui_px(6, 1))
 
                     if draw_button("Create Workspace", variant = .LinkColored, size = .Small, left_icon = .Plus) {
-                        engine.ui_dialog_open(CREATE_WORKSPACE_DIALOG_ID)
+                        state.workspace_name_buf = {}
+                        state.workspace_name_len = 0
+                        engine.ui_dialog_open(WORKSPACE_CREATE_DIALOG_ID)
+                        engine.ui_focus_text_input(WORKSPACE_CREATE_NAME_INPUT_ID)
                     }
 
                     engine.ui_popup_end()
@@ -775,7 +796,7 @@ draw_settings_dialog :: proc() {
                         engine.ui_spacer(engine.ui_fill())
                         engine.ui_set_next_width(engine.ui_px(100, 1))
                         input_result := draw_text_input(
-                            "request_timeout_input",
+                            engine.ui_make_id("request_timeout_input"),
                             state.timeout_buf[:], &state.timeout_len,
                             options = engine.TextInputOptions{filter = proc(r: rune) -> bool { return r >= '0' && r <= '9' }},
                         )
@@ -832,7 +853,9 @@ draw_dialog :: proc(id: engine.Id, width: f32 = 400, x: f32 = -1, y: f32 = 150, 
     }
 }
 
-create_workspace :: proc(workspace_name: string) {
+create_workspace :: proc() {
+    workspace_name := strings.trim_space(string(state.workspace_name_buf[:state.workspace_name_len]))
+
     workspace := Workspace{id = rand.int63(), selected_environment_id = -1}
     copy(workspace.name[:], workspace_name)
 
@@ -841,33 +864,20 @@ create_workspace :: proc(workspace_name: string) {
     save_workspaces()
 }
 
-draw_create_workspace_dialog :: proc() {
-    @static workspace_name_buf: [64]u8
-    @static workspace_name_len: int
-
-    draw_dialog(CREATE_WORKSPACE_DIALOG_ID, draw_content = proc() {
+draw_workspace_create_dialog :: proc() {
+    draw_dialog(WORKSPACE_CREATE_DIALOG_ID, draw_content = proc() {
         engine.ui_text_sized("Create Workspace", THEME_FONT_SIZE_BODY_LG)
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_width(engine.ui_fill())
-        result := draw_text_input("create_workspace_name_input", workspace_name_buf[:], &workspace_name_len, .Medium, engine.TextInputOptions{placeholder = "Workspace name"})
+        result := draw_text_input(WORKSPACE_CREATE_NAME_INPUT_ID, state.workspace_name_buf[:], &state.workspace_name_len, .Medium, engine.TextInputOptions{placeholder = "Workspace name"})
         if result.submitted {
-            workspace_name := strings.trim_space(string(workspace_name_buf[:workspace_name_len]))
-
-            create_workspace(workspace_name)
-
-            workspace_name_buf = {}
-            workspace_name_len = 0
+            create_workspace()
             engine.ui_dialog_close()
         }
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_width(engine.ui_fill())
-        if draw_button("Create", enabled = strings.trim_space(string(workspace_name_buf[:workspace_name_len])) != "") {
-            workspace_name := strings.trim_space(string(workspace_name_buf[:workspace_name_len]))
-
-            create_workspace(workspace_name)
-
-            workspace_name_buf = {}
-            workspace_name_len = 0
+        if draw_button("Create", enabled = strings.trim_space(string(state.workspace_name_buf[:state.workspace_name_len])) != "") {
+            create_workspace()
             engine.ui_dialog_close()
         }
     })
@@ -1000,6 +1010,118 @@ draw_about_dialog :: proc() {
                 if draw_button("Report Bug", .Primary, .Small) {
                     engine.open_url("https://github.com/illusionman1212/moonladder-issues/issues/new?template=bug_report.md")
                 }
+            }
+        }
+    })
+}
+
+rename_workspace :: proc() {
+    target_idx := state.workspace_target_idx
+    new_name := string(state.workspace_name_buf[:state.workspace_name_len])
+    assert(target_idx >= 0 && target_idx < len(state.workspaces))
+    assert(new_name != "")
+
+    mem.zero_item(&state.workspaces[target_idx].name)
+    copy(state.workspaces[target_idx].name[:], new_name)
+
+    save_workspaces()
+}
+
+draw_workspace_rename_dialog :: proc() {
+    draw_dialog(WORKSPACE_RENAME_DIALOG_ID, draw_content = proc() {
+        engine.ui_text_sized("Rename Workspace", THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        result := draw_text_input(WORKSPACE_RENAME_NAME_INPUT_ID, state.workspace_name_buf[:], &state.workspace_name_len, .Medium, engine.TextInputOptions{placeholder = "Workspace name"})
+        if result.submitted {
+            rename_workspace()
+            engine.ui_dialog_close()
+        }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        if draw_button("Save", enabled = strings.trim_space(string(state.workspace_name_buf[:state.workspace_name_len])) != "") {
+            rename_workspace()
+            engine.ui_dialog_close()
+        }
+    })
+}
+
+delete_workspace :: proc() {
+    workspace_index := qt.qvariant_toInt(argv[1])
+    assert(workspace_index > 0 && workspace_index < cast(i32)len(state.workspaces))
+
+    target_idx := cast(int)workspace_index
+    previous_active_workspace_index := state.active_workspace_index
+    active_workspace_index_changed := false
+    active_workspace_deleted := target_idx == previous_active_workspace_index
+
+    if target_idx < previous_active_workspace_index {
+        state.active_workspace_index -= 1
+        active_workspace_index_changed = true
+    } else if active_workspace_deleted {
+        if state.active_workspace_index == len(state.workspaces)-1 {
+            state.active_workspace_index -= 1
+        }
+        active_workspace_index_changed = true
+    }
+
+    // Delete by the 0th index because delete_collection also removes the collection from the workspace's collections slice which shifts everything down
+    for len(state.workspaces[target_idx].collections) > 0 {
+        collection := state.workspaces[target_idx].collections[0]
+        delete_collection(collection, target_idx)
+    }
+    delete(state.workspaces[target_idx].collections)
+
+    parent := qt.qmodelindex_create()
+    defer qt.qmodelindex_delete(parent)
+    qt.qabstractitemmodel_beginRemoveRows(cast(^qt.QAbstractItemModel)workspaces_model, parent, workspace_index, workspace_index)
+    ordered_remove(&state.workspaces, target_idx)
+    qt.qabstractitemmodel_endRemoveRows(cast(^qt.QAbstractItemModel)workspaces_model)
+
+    save_workspaces()
+
+    if active_workspace_index_changed {
+        ARGUMENT_COUNT :: 1
+        arguments := [ARGUMENT_COUNT]^qt.QVariant{
+            qt.qvariant_create_int(cast(i32)state.active_workspace_index)
+        }
+        defer qt.qvariant_delete(arguments[0])
+        qt.qobject_signal_emit(global_q_obj, "current_workspace_index_changed", ARGUMENT_COUNT, cast([^]rawptr)raw_data(arguments[:]))
+    }
+
+    if active_workspace_deleted {
+        emit_current_environment_index_changed(global_q_obj)
+
+        qt.qabstractitemmodel_beginResetModel(cast(^qt.QAbstractItemModel)collections_model)
+        qt.qabstractitemmodel_endResetModel(cast(^qt.QAbstractItemModel)collections_model)
+
+        qt.qabstractitemmodel_beginResetModel(cast(^qt.QAbstractItemModel)environments_model)
+        qt.qabstractitemmodel_endResetModel(cast(^qt.QAbstractItemModel)environments_model)
+
+        reset_selected_environment_variables_model()
+    }
+}
+
+draw_workspace_delete_dialog :: proc() {
+    // TODO: this needs text wrapping, YAY!!
+
+    draw_dialog(WORKSPACE_DELETE_DIALOG_ID, 460, draw_content = proc() {
+        engine.ui_text_sized(fmt.tprintf("Delete \"%s\"?", cstring(&state.workspaces[state.workspace_target_idx].name[0])), THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+        engine.ui_text("This will permanently remove the workspace and all of its collections. This action cannot be undone.")
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_set_next_align_y(.Center)
+        engine.ui_row(); {
+            if draw_button("Cancel", variant = .LinkColored) {
+                engine.ui_dialog_close()
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+            if draw_button("Delete") {
+                // TODO:
+                engine.ui_dialog_close()
             }
         }
     })
@@ -2067,7 +2189,7 @@ draw_radio_button :: proc(label: string, selected: bool) -> bool {
 // Size the input from the call site with ui_set_next_width/height or
 // ui_push_pref_width/height before calling.
 draw_text_input :: proc(
-    id_str: string,
+    id: engine.Id,
     buf: []byte,
     text_len: ^int,
     size := TextInputSize.Medium,
@@ -2088,16 +2210,15 @@ draw_text_input :: proc(
         engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
 
         text_input_sig := engine.ui_signal_from_box(text_input_box)
-        text_input_id := engine.ui_make_id(id_str)
 
         if engine.ui_clicked(text_input_sig) {
-            engine.ui_focus_text_input(text_input_id)
+            engine.ui_focus_text_input(id)
         }
         if engine.ui_hovering(text_input_sig) {
             engine.set_cursor(.IBEAM)
         }
 
-        input_result := engine.ui_text_input(text_input_id, buf, text_len, options)
+        input_result := engine.ui_text_input(id, buf, text_len, options)
 
         if input_result.boxes.caret != nil {
             input_result.boxes.caret.background_color = engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme])
@@ -5379,7 +5500,9 @@ main :: proc() {
             }
             draw_ui_debug_overlay()
             draw_settings_dialog()
-            draw_create_workspace_dialog()
+            draw_workspace_create_dialog()
+            draw_workspace_rename_dialog()
+            draw_workspace_delete_dialog()
             draw_about_dialog()
             engine.ui_end_build()
 
