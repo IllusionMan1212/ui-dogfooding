@@ -1047,22 +1047,19 @@ draw_workspace_rename_dialog :: proc() {
 }
 
 delete_workspace :: proc() {
-    workspace_index := qt.qvariant_toInt(argv[1])
-    assert(workspace_index > 0 && workspace_index < cast(i32)len(state.workspaces))
+    workspace_index := state.workspace_target_idx
+    assert(workspace_index > 0 && workspace_index < len(state.workspaces))
 
     target_idx := cast(int)workspace_index
     previous_active_workspace_index := state.active_workspace_index
-    active_workspace_index_changed := false
     active_workspace_deleted := target_idx == previous_active_workspace_index
 
     if target_idx < previous_active_workspace_index {
         state.active_workspace_index -= 1
-        active_workspace_index_changed = true
     } else if active_workspace_deleted {
         if state.active_workspace_index == len(state.workspaces)-1 {
             state.active_workspace_index -= 1
         }
-        active_workspace_index_changed = true
     }
 
     // Delete by the 0th index because delete_collection also removes the collection from the workspace's collections slice which shifts everything down
@@ -1072,44 +1069,17 @@ delete_workspace :: proc() {
     }
     delete(state.workspaces[target_idx].collections)
 
-    parent := qt.qmodelindex_create()
-    defer qt.qmodelindex_delete(parent)
-    qt.qabstractitemmodel_beginRemoveRows(cast(^qt.QAbstractItemModel)workspaces_model, parent, workspace_index, workspace_index)
     ordered_remove(&state.workspaces, target_idx)
-    qt.qabstractitemmodel_endRemoveRows(cast(^qt.QAbstractItemModel)workspaces_model)
 
     save_workspaces()
-
-    if active_workspace_index_changed {
-        ARGUMENT_COUNT :: 1
-        arguments := [ARGUMENT_COUNT]^qt.QVariant{
-            qt.qvariant_create_int(cast(i32)state.active_workspace_index)
-        }
-        defer qt.qvariant_delete(arguments[0])
-        qt.qobject_signal_emit(global_q_obj, "current_workspace_index_changed", ARGUMENT_COUNT, cast([^]rawptr)raw_data(arguments[:]))
-    }
-
-    if active_workspace_deleted {
-        emit_current_environment_index_changed(global_q_obj)
-
-        qt.qabstractitemmodel_beginResetModel(cast(^qt.QAbstractItemModel)collections_model)
-        qt.qabstractitemmodel_endResetModel(cast(^qt.QAbstractItemModel)collections_model)
-
-        qt.qabstractitemmodel_beginResetModel(cast(^qt.QAbstractItemModel)environments_model)
-        qt.qabstractitemmodel_endResetModel(cast(^qt.QAbstractItemModel)environments_model)
-
-        reset_selected_environment_variables_model()
-    }
 }
 
 draw_workspace_delete_dialog :: proc() {
-    // TODO: this needs text wrapping, YAY!!
-
     draw_dialog(WORKSPACE_DELETE_DIALOG_ID, 460, draw_content = proc() {
         engine.ui_text_sized(fmt.tprintf("Delete \"%s\"?", cstring(&state.workspaces[state.workspace_target_idx].name[0])), THEME_FONT_SIZE_BODY_LG)
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
-        engine.ui_text("This will permanently remove the workspace and all of its collections. This action cannot be undone.")
+        engine.ui_text_wrapped("This will permanently remove the workspace and all of its collections. This action cannot be undone.")
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_width(engine.ui_fill())
         engine.ui_set_next_height(engine.ui_children_sum(1))
@@ -1120,7 +1090,7 @@ draw_workspace_delete_dialog :: proc() {
             }
             engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
             if draw_button("Delete") {
-                // TODO:
+                delete_workspace()
                 engine.ui_dialog_close()
             }
         }
@@ -5269,10 +5239,65 @@ new_request_tab :: proc() {
     append(&state.tabs, req)
 }
 
+delete_collection :: proc(collection: ^Collection, collection_workspace_idx: int) {
+    if collection.parent != nil {
+        if collection.parent.first == collection {
+            collection.parent.first = collection.next
+        }
+        if collection.parent.last == collection {
+            collection.parent.last = collection.prev
+        }
+    }
+    if collection.prev != nil {
+        collection.prev.next = collection.next
+    }
+    if collection.next != nil {
+        collection.next.prev = collection.prev
+    }
+
+    for child := collection.first; child != nil; child = child.next {
+        delete_collection(child, collection_workspace_idx)
+    }
+
+    for &request in collection.requests {
+        for &tab, i in state.tabs {
+            req, is_request := tab.(^Request)
+            if !is_request { continue }
+
+            if req.id == request.id {
+                req.collection = nil
+                req.is_modified = true
+                req.modification_hash = 0
+
+                break
+            }
+        }
+
+        destroy_request(&request)
+    }
+    delete(collection.requests)
+
+    // Close any open collection tab pointing to this collection
+    for i := cast(i32)len(state.tabs) - 1; i >= 0; i -= 1 {
+        tab_collection, is_collection := state.tabs[i].(^Collection)
+        if is_collection && tab_collection == collection {
+            ordered_remove(&state.tabs, i)
+        }
+    }
+
+    if collection.parent == nil {
+        for coll, i in state.workspaces[collection_workspace_idx].collections {
+            if coll == collection {
+                ordered_remove(&state.workspaces[collection_workspace_idx].collections, i)
+                break
+            }
+        }
+    }
+
+    free(collection, state.collection_allocator)
+}
+
 hash_request :: proc(request: ^Request) -> u128 {
-    // TODO: we no longer use imgui
-    // Only hash the bytes up to the null terminator since imgui optimizes ctrl+backspace
-    // by setting the first byte to a null terminator and the remaining bytes no longer equal zeros
     xxhash.XXH3_128_update(state.hasher, request.name[:len(cstring(&request.name[0]))])
     xxhash.XXH3_128_update(state.hasher, {cast(u8)request.method})
     xxhash.XXH3_128_update(state.hasher, request.url[:len(cstring(&request.url[0]))])

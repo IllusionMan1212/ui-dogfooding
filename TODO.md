@@ -54,6 +54,9 @@ Next on the list:-
 Misc:
 - [ ] We should probably somehow generate the whole ui_push_* ui_pop_* ui_set_next_* procedures as well as their nodes.
 
+- [ ] Empty state for collections/environment sidebar
+- [ ] Migrate everything to use string builder with input limitations
+
 Optimizations:-
 - [x] Only rendering frames when something has visually changed
     - This one is becoming needed more and more as more text is drawn.
