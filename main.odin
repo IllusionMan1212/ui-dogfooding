@@ -50,6 +50,8 @@ WORKSPACE_CREATE_NAME_INPUT_ID :: #hash("create_workspace_name_input", "fnv32a")
 WORKSPACE_RENAME_DIALOG_ID :: #hash("rename_workspace_dialog", "fnv32a")
 WORKSPACE_RENAME_NAME_INPUT_ID :: #hash("rename_workspace_name_input", "fnv32a")
 WORKSPACE_DELETE_DIALOG_ID :: #hash("delete_workspace_dialog", "fnv32a")
+COLLECTION_CREATE_DIALOG_ID :: #hash("create_collection_dialog", "fnv32a")
+COLLECTION_CREATE_NAME_INPUT_ID :: #hash("create_collection_name_input", "fnv32a")
 SETTINGS_DIALOG_ID :: #hash("settings_dialog", "fnv32a")
 ABOUT_DIALOG_ID :: #hash("about_dialog", "fnv32a")
 
@@ -268,7 +270,7 @@ Request :: struct {
 
 Collection :: struct {
     id: i64,
-    name: [128]u8 `fmt:"s,"`,
+    name: string `fmt:"s,"`, // Limited to 64 characters (NOT BYTES!)
     requests: [dynamic]Request,
     auth: Authorization,
     parent: ^Collection `json:"-"`,
@@ -293,7 +295,7 @@ Environment :: struct {
 
 Workspace :: struct {
     id: i64,
-    name: string `fmt:"s,"`,
+    name: string `fmt:"s,"`, // Limited to 64 characters (NOT BYTES!)
     collections: [dynamic]^Collection,
     environments: [dynamic]Environment,
     selected_environment_id: i64 `json:"selected_environment_id"`,
@@ -435,6 +437,10 @@ State :: struct {
 
     // Workspace creation/rename dialog state
     workspace_name_builder: strings.Builder,
+
+    // Collection creation dialog state
+    collection_name_builder: strings.Builder,
+    collection_creation_parent: ^Collection, // nil when creating a root-level collection
 
     // Workspace rename/delete dialog state
     workspace_target_idx: int,
@@ -881,6 +887,63 @@ draw_workspace_create_dialog :: proc() {
     })
 }
 
+create_collection :: proc() {
+    collection_name := strings.trim_space(strings.to_string(state.collection_name_builder))
+
+    collection := new(Collection, state.collection_allocator)
+    collection.id = rand.int63()
+    collection.requests = make([dynamic]Request, state.collection_allocator)
+    collection.name = strings.clone(collection_name, state.collection_allocator)
+
+    parent := state.collection_creation_parent
+
+    if parent == nil {
+        append(&state.workspaces[state.active_workspace_index].collections, collection)
+    } else {
+        collection.parent = parent
+
+        if parent.first == nil {
+            parent.first = collection
+            parent.last = collection
+        } else {
+            parent.last.next = collection
+            collection.prev = parent.last
+            parent.last = collection
+        }
+
+        // Reveal the newly created sub-collection
+        parent.is_expanded = true
+    }
+
+    save_workspaces()
+}
+
+open_collection_create_dialog :: proc(parent: ^Collection) {
+    strings.builder_reset(&state.collection_name_builder)
+    state.collection_creation_parent = parent
+    engine.ui_dialog_open(COLLECTION_CREATE_DIALOG_ID)
+    engine.ui_focus_text_input(COLLECTION_CREATE_NAME_INPUT_ID)
+}
+
+draw_collection_create_dialog :: proc() {
+    draw_dialog(COLLECTION_CREATE_DIALOG_ID, draw_content = proc() {
+        engine.ui_text_sized("New Collection", THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        result := draw_text_input(COLLECTION_CREATE_NAME_INPUT_ID, &state.collection_name_builder, .Medium, engine.TextInputOptions{placeholder = "Collection name", max_length = 64})
+        if result.submitted && strings.trim_space(strings.to_string(state.collection_name_builder)) != "" {
+            create_collection()
+            engine.ui_dialog_close()
+        }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        if draw_button("Create", enabled = strings.trim_space(strings.to_string(state.collection_name_builder)) != "") {
+            create_collection()
+            engine.ui_dialog_close()
+        }
+    })
+}
+
 draw_about_dialog :: proc() {
     draw_dialog(ABOUT_DIALOG_ID, 520, y = 96, draw_content = proc() {
         engine.ui_text_sized("Moonladder", THEME_FONT_SIZE_BODY_LG)
@@ -1015,7 +1078,7 @@ draw_about_dialog :: proc() {
 
 rename_workspace :: proc() {
     target_idx := state.workspace_target_idx
-    new_name := strings.to_string(state.workspace_name_builder)
+    new_name := strings.trim_space(strings.to_string(state.workspace_name_builder))
     assert(target_idx >= 0 && target_idx < len(state.workspaces))
     assert(new_name != "")
 
@@ -1031,7 +1094,7 @@ draw_workspace_rename_dialog :: proc() {
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_width(engine.ui_fill())
         result := draw_text_input(WORKSPACE_RENAME_NAME_INPUT_ID, &state.workspace_name_builder, .Medium, engine.TextInputOptions{placeholder = "Workspace name", max_length = 64})
-        if result.submitted {
+        if result.submitted && strings.trim_space(strings.to_string(state.workspace_name_builder)) != "" {
             rename_workspace()
             engine.ui_dialog_close()
         }
@@ -1378,59 +1441,94 @@ draw_collections_list :: proc() {
     engine.ui_column(); {
         engine.ui_padding(12, {.Left})
 
-        {
-            engine.ui_set_next_align_x(.End)
+        if len(state.workspaces[state.active_workspace_index].collections) == 0 {
+            engine.ui_set_next_align_x(.Center)
             engine.ui_set_next_align_y(.Center)
             engine.ui_set_next_width(engine.ui_fill())
-            engine.ui_set_next_height(engine.ui_children_sum(1))
-            engine.ui_row(); {
+            engine.ui_set_next_height(engine.ui_fill())
+            engine.ui_column(); {
                 engine.ui_padding(12, {.Right})
-                if draw_button("New", .LinkColored, .Small, left_icon = .Plus) {
-                    // TODO: new collection dialog
+
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_ICON_TERTIARY_DEFAULT[state.config.theme]))
+                engine.ui_text_sized(ICONS[.FolderAdd], 24)
+
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+
+                engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+                engine.ui_text_sized("No collections yet", THEME_FONT_SIZE_BODY_LG)
+
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+                engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
+                engine.ui_set_next_text_align(.Center)
+                engine.ui_text_wrapped("Create a new collection or import one to get started")
+
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+
+                width := engine.ui_text_measure_string("New Collection").x + THEME_SPACING_MD
+
+                engine.ui_set_next_width(engine.ui_px(width, 1))
+                if draw_button("New Collection", variant = .Primary) {
+                    open_collection_create_dialog(nil)
                 }
-                engine.ui_spacer(engine.ui_px(12, 1))
-                if draw_button("Import", .LinkColored, .Small) {
+
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+
+                engine.ui_set_next_width(engine.ui_px(width, 1))
+                if draw_button("Import", variant = .SecondaryColored) {
                     // TODO: import
                 }
             }
-        }
-
-        engine.ui_spacer(engine.ui_px(12, 1))
-
-        if len(state.workspaces[state.active_workspace_index].collections) == 0 {
-            // TODO: draw empty state
-        }
-
-        engine.ui_set_next_width(engine.ui_fill())
-        engine.ui_set_next_height(engine.ui_fill())
-        engine.ui_row(); {
-            scroll_box: ^engine.Box
+        } else {
             {
-                // TODO: only draw the border when drag is accepted
-                extra_flags := engine.Flags{/*.DrawBorder*/}
-
-                engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT))
-                engine.ui_set_next_border_thickness(1.5)
-                engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                engine.ui_set_next_align_x(.End)
+                engine.ui_set_next_align_y(.Center)
                 engine.ui_set_next_width(engine.ui_fill())
-                engine.ui_set_next_height(engine.ui_fill())
-                scroll_box = engine.ui_scroll_column(extra_flags = extra_flags); {
-                    for collection in state.workspaces[state.active_workspace_index].collections {
-                        draw_collection_item(collection)
+                engine.ui_set_next_height(engine.ui_children_sum(1))
+                engine.ui_row(); {
+                    engine.ui_padding(12, {.Right})
+                    if draw_button("New", .LinkColored, .Small, left_icon = .Plus) {
+                        open_collection_create_dialog(nil)
+                    }
+                    engine.ui_spacer(engine.ui_px(12, 1))
+                    if draw_button("Import", .LinkColored, .Small) {
+                        // TODO: import
                     }
                 }
             }
 
-            engine.ui_spacer(engine.ui_px(4, 1))
-            SCROLLBAR_V(scroll_box)
-            engine.ui_spacer(engine.ui_px(2, 1))
+            engine.ui_spacer(engine.ui_px(12, 1))
+
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_fill())
+            engine.ui_row(); {
+                scroll_box: ^engine.Box
+                {
+                    // TODO: only draw the border when drag is accepted
+                    extra_flags := engine.Flags{/*.DrawBorder*/}
+
+                    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT))
+                    engine.ui_set_next_border_thickness(1.5)
+                    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                    engine.ui_set_next_width(engine.ui_fill())
+                    engine.ui_set_next_height(engine.ui_fill())
+                    scroll_box = engine.ui_scroll_column(extra_flags = extra_flags); {
+                        for collection in state.workspaces[state.active_workspace_index].collections {
+                            draw_collection_item(collection)
+                        }
+                    }
+                }
+
+                engine.ui_spacer(engine.ui_px(4, 1))
+                SCROLLBAR_V(scroll_box)
+                engine.ui_spacer(engine.ui_px(2, 1))
+            }
         }
     }
 }
 
 draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
-    name := string(cstring(&collection.name[0]))
-
     {
         engine.ui_set_next_align_x(.Start)
         engine.ui_set_next_align_y(.Center)
@@ -1473,7 +1571,7 @@ draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
                     engine.ui_spacer(engine.ui_px(4, 1))
 
                     engine.ui_set_next_font_size(14)
-                    engine.ui_text_shrinkable(name)
+                    engine.ui_text_shrinkable(collection.name)
                     engine.ui_pop_text_color()
                 }
             }
@@ -1678,33 +1776,68 @@ draw_environments_list :: proc() {
     engine.ui_column(); {
         engine.ui_padding(12, {.Left, .Right})
 
-        {
-            engine.ui_set_next_align_x(.End)
+        if len(state.workspaces[state.active_workspace_index].environments) == 0 {
+            engine.ui_set_next_align_x(.Center)
             engine.ui_set_next_align_y(.Center)
             engine.ui_set_next_width(engine.ui_fill())
-            engine.ui_set_next_height(engine.ui_children_sum(1))
-            engine.ui_row(); {
-                if draw_button("New", .LinkColored, .Small, left_icon = .Plus) {
-                    // TODO: new environments dialog
+            engine.ui_set_next_height(engine.ui_fill())
+            engine.ui_column(); {
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_ICON_TERTIARY_DEFAULT[state.config.theme]))
+                engine.ui_text_sized(ICONS[.Environment], 24)
+
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+
+                engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+                engine.ui_text_sized("No environments yet", THEME_FONT_SIZE_BODY_LG)
+
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+                engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
+                engine.ui_set_next_text_align(.Center)
+                engine.ui_text_wrapped("Create a new environment or import one to get started")
+
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+
+                width := engine.ui_text_measure_string("New Environment").x + THEME_SPACING_MD
+
+                engine.ui_set_next_width(engine.ui_px(width, 1))
+                if draw_button("New Environment", variant = .Primary) {
+                    // TODO: new environment dialog
                 }
-                engine.ui_spacer(engine.ui_px(12, 1))
-                if draw_button("Import", .LinkColored, .Small) {
+
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+
+                engine.ui_set_next_width(engine.ui_px(width, 1))
+                if draw_button("Import", variant = .SecondaryColored) {
                     // TODO: import
                 }
             }
-        }
+        } else {
+            {
+                engine.ui_set_next_align_x(.End)
+                engine.ui_set_next_align_y(.Center)
+                engine.ui_set_next_width(engine.ui_fill())
+                engine.ui_set_next_height(engine.ui_children_sum(1))
+                engine.ui_row(); {
+                    if draw_button("New", .LinkColored, .Small, left_icon = .Plus) {
+                        // TODO: new environments dialog
+                    }
+                    engine.ui_spacer(engine.ui_px(12, 1))
+                    if draw_button("Import", .LinkColored, .Small) {
+                        // TODO: import
+                    }
+                }
+            }
 
-        engine.ui_spacer(engine.ui_px(12, 1))
+            engine.ui_spacer(engine.ui_px(12, 1))
 
-        if len(state.workspaces[state.active_workspace_index].environments) == 0 {
-            // TODO: draw empty state
-        }
-
-        engine.ui_set_next_width(engine.ui_fill())
-        engine.ui_set_next_height(engine.ui_fill())
-        engine.ui_column(); {
-            for &environment in state.workspaces[state.active_workspace_index].environments {
-                draw_environment_item(&environment)
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_fill())
+            engine.ui_column(); {
+                for &environment in state.workspaces[state.active_workspace_index].environments {
+                    draw_environment_item(&environment)
+                }
             }
         }
     }
@@ -3518,10 +3651,8 @@ collection_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) 
                 case i64:
                     id := ((cast(^i64)(data))^)
                     io.write_i64(w, id) or_return
-                case [128]u8:
-                    cstr := ((cast(^[128]u8)(data))^)
-                    str := strings.clone_from_cstring(cstring(&cstr[0]))
-                    defer delete(str)
+                case string:
+                    str := ((cast(^string)(data))^)
                     io.write_quoted_string(w, str) or_return
                 case [dynamic]Request:
                     req := ((cast(^[dynamic]Request)(data))^)
@@ -3895,7 +4026,7 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
     case:
         return nil, .Invalid_Allocator
     }
-    copy(collection.name[:], name[:])
+    collection.name = strings.clone(name, state.collection_allocator)
 
     // Unmarshal collection-level auth (optional, for backwards compatibility with older saves)
     #partial switch auth in val["auth"] {
@@ -5456,6 +5587,7 @@ main :: proc() {
             draw_workspace_create_dialog()
             draw_workspace_rename_dialog()
             draw_workspace_delete_dialog()
+            draw_collection_create_dialog()
             draw_about_dialog()
             engine.ui_end_build()
 
