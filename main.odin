@@ -241,7 +241,7 @@ Request :: struct {
     id: i64, // 8
     name: [128]u8 `fmt:"s,"`, // 128
     method: HttpMethod, // 8
-    url: [4096]u8 `fmt:"s,"`, // 4096
+    url: strings.Builder `fmt:"s,"`, // 40
     body: RequestBody, // 104
     query_params: [dynamic]QueryParam, // 40
     path_params: map[string]PathParam, // 32
@@ -293,7 +293,7 @@ Environment :: struct {
 
 Workspace :: struct {
     id: i64,
-    name: [64]u8 `fmt:"s,"`,
+    name: string `fmt:"s,"`,
     collections: [dynamic]^Collection,
     environments: [dynamic]Environment,
     selected_environment_id: i64 `json:"selected_environment_id"`,
@@ -431,12 +431,10 @@ State :: struct {
     ui_debug_overlay_drag_start_mouse: [2]f32,
     ui_debug_overlay_drag_start_pos: [2]f32,
 
-    timeout_buf: [8]u8,
-    timeout_len: int,
+    timeout_builder: strings.Builder,
 
     // Workspace creation/rename dialog state
-    workspace_name_buf: [64]u8,
-    workspace_name_len: int,
+    workspace_name_builder: strings.Builder,
 
     // Workspace rename/delete dialog state
     workspace_target_idx: int,
@@ -527,7 +525,7 @@ draw_topbar :: proc() {
 
                     engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
                     defer engine.ui_pop_text_color()
-                    engine.ui_text_sized(string(cstring(&state.workspaces[state.active_workspace_index].name[0])), 14)
+                    engine.ui_text_sized(state.workspaces[state.active_workspace_index].name, 14)
                     engine.ui_spacer(engine.ui_px(12, 1))
                     engine.ui_text_sized(ICONS[.Chevron], 16)
                 }
@@ -563,7 +561,6 @@ draw_topbar :: proc() {
                                 engine.ui_spacer(engine.ui_px(6, 1))
                             }
 
-                            name := string(cstring(&workspace.name[0]))
                             is_active := i == state.active_workspace_index
                             is_menu_open := state.action_menu_workspace_id == workspace.id
 
@@ -603,7 +600,7 @@ draw_topbar :: proc() {
                                     engine.ui_set_next_align_y(.Center)
                                     engine.ui_row(); {
                                         engine.ui_set_next_font_size(14)
-                                        engine.ui_text_shrinkable(name)
+                                        engine.ui_text_shrinkable(workspace.name)
                                         engine.ui_pop_text_color()
                                     }
                                 }
@@ -685,9 +682,8 @@ draw_topbar :: proc() {
                                             if engine.ui_clicked(engine.ui_signal_from_box(rename_box)) {
                                                 state.action_menu_workspace_id = 0
                                                 engine.ui_popup_close()
-                                                mem.zero_item(&state.workspace_name_buf)
-                                                copy(state.workspace_name_buf[:], workspace.name[:])
-                                                state.workspace_name_len = len(string(cstring(&workspace.name[0])))
+                                                strings.builder_reset(&state.workspace_name_builder)
+                                                strings.write_string(&state.workspace_name_builder, workspace.name)
                                                 engine.ui_dialog_open(WORKSPACE_RENAME_DIALOG_ID)
                                                 engine.ui_focus_text_input(WORKSPACE_RENAME_NAME_INPUT_ID)
                                                 engine.ui_text_input_select_all(WORKSPACE_RENAME_NAME_INPUT_ID)
@@ -737,8 +733,7 @@ draw_topbar :: proc() {
                     engine.ui_spacer(engine.ui_px(6, 1))
 
                     if draw_button("Create Workspace", variant = .LinkColored, size = .Small, left_icon = .Plus) {
-                        state.workspace_name_buf = {}
-                        state.workspace_name_len = 0
+                        strings.builder_reset(&state.workspace_name_builder)
                         engine.ui_dialog_open(WORKSPACE_CREATE_DIALOG_ID)
                         engine.ui_focus_text_input(WORKSPACE_CREATE_NAME_INPUT_ID)
                     }
@@ -797,17 +792,20 @@ draw_settings_dialog :: proc() {
                         engine.ui_set_next_width(engine.ui_px(100, 1))
                         input_result := draw_text_input(
                             engine.ui_make_id("request_timeout_input"),
-                            state.timeout_buf[:], &state.timeout_len,
-                            options = engine.TextInputOptions{filter = proc(r: rune) -> bool { return r >= '0' && r <= '9' }},
+                            &state.timeout_builder,
+                            options = engine.TextInputOptions{
+                                filter = proc(r: rune) -> bool { return r >= '0' && r <= '9' },
+                                max_length = 7,
+                            },
                         )
 
                         if input_result.focus_lost || input_result.submitted {
-                            v, ok := strconv.parse_int(string(state.timeout_buf[:state.timeout_len]))
+                            v, ok := strconv.parse_int(strings.to_string(state.timeout_builder))
                             if !ok { v = state.config.timeout_ms }         // empty/invalid field -> keep current value
                             v = clamp(v, TIMEOUT_MIN_MS, TIMEOUT_MAX_MS)
                             state.config.timeout_ms = v
-                            s := strconv.write_int(state.timeout_buf[:], i64(v), 10)    // re-format -> canonical clamped display
-                            state.timeout_len = len(s)
+                            strings.builder_reset(&state.timeout_builder)
+                            strings.write_int(&state.timeout_builder, v, 10)    // re-format -> canonical clamped display
 
                             save_config()
                         }
@@ -854,10 +852,10 @@ draw_dialog :: proc(id: engine.Id, width: f32 = 400, x: f32 = -1, y: f32 = 150, 
 }
 
 create_workspace :: proc() {
-    workspace_name := strings.trim_space(string(state.workspace_name_buf[:state.workspace_name_len]))
+    workspace_name := strings.trim_space(strings.to_string(state.workspace_name_builder))
 
     workspace := Workspace{id = rand.int63(), selected_environment_id = -1}
-    copy(workspace.name[:], workspace_name)
+    workspace.name = strings.clone(workspace_name)
 
     append(&state.workspaces, workspace)
 
@@ -869,14 +867,14 @@ draw_workspace_create_dialog :: proc() {
         engine.ui_text_sized("Create Workspace", THEME_FONT_SIZE_BODY_LG)
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_width(engine.ui_fill())
-        result := draw_text_input(WORKSPACE_CREATE_NAME_INPUT_ID, state.workspace_name_buf[:], &state.workspace_name_len, .Medium, engine.TextInputOptions{placeholder = "Workspace name"})
+        result := draw_text_input(WORKSPACE_CREATE_NAME_INPUT_ID, &state.workspace_name_builder, .Medium, engine.TextInputOptions{placeholder = "Workspace name", max_length = 64})
         if result.submitted {
             create_workspace()
             engine.ui_dialog_close()
         }
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_width(engine.ui_fill())
-        if draw_button("Create", enabled = strings.trim_space(string(state.workspace_name_buf[:state.workspace_name_len])) != "") {
+        if draw_button("Create", enabled = strings.trim_space(strings.to_string(state.workspace_name_builder)) != "") {
             create_workspace()
             engine.ui_dialog_close()
         }
@@ -1017,12 +1015,12 @@ draw_about_dialog :: proc() {
 
 rename_workspace :: proc() {
     target_idx := state.workspace_target_idx
-    new_name := string(state.workspace_name_buf[:state.workspace_name_len])
+    new_name := strings.to_string(state.workspace_name_builder)
     assert(target_idx >= 0 && target_idx < len(state.workspaces))
     assert(new_name != "")
 
-    mem.zero_item(&state.workspaces[target_idx].name)
-    copy(state.workspaces[target_idx].name[:], new_name)
+    delete(state.workspaces[target_idx].name)
+    state.workspaces[target_idx].name = strings.clone(new_name)
 
     save_workspaces()
 }
@@ -1032,14 +1030,14 @@ draw_workspace_rename_dialog :: proc() {
         engine.ui_text_sized("Rename Workspace", THEME_FONT_SIZE_BODY_LG)
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_width(engine.ui_fill())
-        result := draw_text_input(WORKSPACE_RENAME_NAME_INPUT_ID, state.workspace_name_buf[:], &state.workspace_name_len, .Medium, engine.TextInputOptions{placeholder = "Workspace name"})
+        result := draw_text_input(WORKSPACE_RENAME_NAME_INPUT_ID, &state.workspace_name_builder, .Medium, engine.TextInputOptions{placeholder = "Workspace name", max_length = 64})
         if result.submitted {
             rename_workspace()
             engine.ui_dialog_close()
         }
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_width(engine.ui_fill())
-        if draw_button("Save", enabled = strings.trim_space(string(state.workspace_name_buf[:state.workspace_name_len])) != "") {
+        if draw_button("Save", enabled = strings.trim_space(strings.to_string(state.workspace_name_builder)) != "") {
             rename_workspace()
             engine.ui_dialog_close()
         }
@@ -1068,6 +1066,7 @@ delete_workspace :: proc() {
         delete_collection(collection, target_idx)
     }
     delete(state.workspaces[target_idx].collections)
+    delete(state.workspaces[target_idx].name)
 
     ordered_remove(&state.workspaces, target_idx)
 
@@ -1076,7 +1075,7 @@ delete_workspace :: proc() {
 
 draw_workspace_delete_dialog :: proc() {
     draw_dialog(WORKSPACE_DELETE_DIALOG_ID, 460, draw_content = proc() {
-        engine.ui_text_sized(fmt.tprintf("Delete \"%s\"?", cstring(&state.workspaces[state.workspace_target_idx].name[0])), THEME_FONT_SIZE_BODY_LG)
+        engine.ui_text_sized(fmt.tprintf("Delete \"%s\"?", state.workspaces[state.workspace_target_idx].name), THEME_FONT_SIZE_BODY_LG)
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
         engine.ui_text_wrapped("This will permanently remove the workspace and all of its collections. This action cannot be undone.")
@@ -2160,8 +2159,7 @@ draw_radio_button :: proc(label: string, selected: bool) -> bool {
 // ui_push_pref_width/height before calling.
 draw_text_input :: proc(
     id: engine.Id,
-    buf: []byte,
-    text_len: ^int,
+    builder: ^strings.Builder,
     size := TextInputSize.Medium,
     options := engine.TextInputOptions{},
     caller := #caller_location,
@@ -2188,7 +2186,7 @@ draw_text_input :: proc(
             engine.set_cursor(.IBEAM)
         }
 
-        input_result := engine.ui_text_input(id, buf, text_len, options)
+        input_result := engine.ui_text_input(id, builder, options)
 
         if input_result.boxes.caret != nil {
             input_result.boxes.caret.background_color = engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme])
@@ -2269,13 +2267,11 @@ draw_url_text_input :: proc(req: ^Request) {
         {
             engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
             engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
-            url_len := len(cstring(&req.url[0]))
             engine.ui_set_next_width(engine.ui_fill())
             engine.ui_set_next_height(engine.ui_px(20, 1))
             input_result := engine.ui_text_input(
                 text_input_id,
-                req.url[:],
-                &url_len,
+                &req.url,
                 engine.TextInputOptions{placeholder = "Enter URL or paste text"},
             )
             if input_result.boxes.caret != nil {
@@ -2411,16 +2407,10 @@ draw_request_main_area :: proc(req: ^Request) {
                             engine.ui_set_next_height(engine.ui_children_sum(1))
                             engine.ui_set_next_align_y(.Center)
                             engine.ui_row(); {
-                                // { // Method and URL Input
-                                //     engine.ui_set_next_width(engine.ui_fill())
-                                //     engine.ui_set_next_height(engine.ui_px(40, 1))
-                                //     engine.ui_set_next_flags({.DrawBackground})
-                                //     engine.ui_row()
-                                // }
                                 engine.ui_set_next_width(engine.ui_fill())
                                 draw_url_text_input(req)
                                 engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
-                                if draw_button("Send", enabled = len(cstring(&req.url[0])) > 0) {
+                                if draw_button("Send", enabled = strings.builder_len(req.url) > 0) {
                                     send_request(req)
                                 }
                                 engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
@@ -2740,7 +2730,7 @@ migrate_collections_schema_1_to_2 :: proc(data: []byte) -> ([]byte, bool) {
         id = rand.int63(),
         collections = collections_file.collections,
     })
-    copy(workspaces_file.workspaces[0].name[:], "Personal Workspace")
+    workspaces_file.workspaces[0].name = "Personal Workspace"
     workspaces_file.active_workspace_id = workspaces_file.workspaces[0].id
 
     migrated_data, marshal_err := json.marshal(workspaces_file)
@@ -2876,6 +2866,7 @@ load_workspaces :: proc() {
     free_all(state.collection_allocator)
     // unmarshal allocates a new dynamic array every time so we delete it every time.
     for workspace in state.workspaces {
+        delete(workspace.name)
         delete(workspace.collections)
     }
     delete(state.workspaces)
@@ -2951,8 +2942,8 @@ load_config_and_initialize_state :: proc() {
 
     state.config.timeout_ms = TIMEOUT_DEFAULT_MS   // baseline; JSON overrides only if the key is present
     defer {
-        s := strconv.write_int(state.timeout_buf[:], i64(state.config.timeout_ms), 10)
-        state.timeout_len = len(s)
+        strings.builder_reset(&state.timeout_builder)
+        strings.write_int(&state.timeout_builder, state.config.timeout_ms, 10)
     }
 
     config_path, ok := get_config_path("config.json")
@@ -3029,8 +3020,8 @@ copy_request_data :: proc(dst: ^Request, src: ^Request) {
     mem.zero_item(&dst.name)
     copy(dst.name[:], src.name[:])
     dst.method = src.method
-    mem.zero_item(&dst.url)
-    copy(dst.url[:], src.url[:])
+    strings.builder_reset(&dst.url)
+    strings.write_string(&dst.url, strings.to_string(src.url))
 
     delete(dst.query_params)
     dst.query_params = make([dynamic]QueryParam, len(src.query_params))
@@ -3103,6 +3094,7 @@ copy_request_data :: proc(dst: ^Request, src: ^Request) {
 }
 
 destroy_request :: proc(request: ^Request) {
+    strings.builder_destroy(&request.url)
     strings.builder_destroy(&request.body.text)
     for &field in request.body.structured {
         for file_path in field.file_paths {
@@ -3138,22 +3130,6 @@ destroy_request :: proc(request: ^Request) {
     if request.form != nil {
         curl.mime_free(request.form)
     }
-
-    // if request.query_params_model != nil {
-    //     qt.qobject_delete(cast(^qt.QObject)request.query_params_model)
-    // }
-    // if request.headers_model != nil {
-    //     qt.qobject_delete(cast(^qt.QObject)request.headers_model)
-    // }
-    // if request.path_params_model != nil {
-    //     qt.qobject_delete(cast(^qt.QObject)request.path_params_model)
-    // }
-    // if request.response_headers_model != nil {
-    //     qt.qobject_delete(cast(^qt.QObject)request.response_headers_model)
-    // }
-    // if request.body_form_model != nil {
-    //     qt.qobject_delete(cast(^qt.QObject)request.body_form_model)
-    // }
 }
 
 destroy_collection :: proc(collection: ^Collection) {
@@ -3193,7 +3169,7 @@ cleanup :: proc() {
 update_url_from_query_params :: proc(request: ^Request) {
     merged_url := strings.builder_make_len_cap(0, 8192)
     defer strings.builder_destroy(&merged_url)
-    split_url := strings.split_n(string(cstring(&request.url[0])), "?", 2)
+    split_url := strings.split_n(strings.to_string(request.url), "?", 2)
     defer delete(split_url)
     url_no_queries := split_url[0]
     strings.write_string(&merged_url, url_no_queries)
@@ -3221,8 +3197,8 @@ update_url_from_query_params :: proc(request: ^Request) {
         }
     }
 
-    mem.zero_item(&request.url)
-    copy(request.url[:], strings.to_string(merged_url))
+    strings.builder_reset(&request.url)
+    strings.write_string(&request.url, strings.to_string(merged_url))
 }
 
 is_path_param_char :: #force_inline proc "contextless" (b: u8) -> bool {
@@ -3236,7 +3212,7 @@ parse_path_params_from_url :: proc(request: ^Request) {
     old_path_params := request.path_params
     new_path_params := make(map[string]PathParam)
 
-    url_copy := strings.clone_from_cstring(cstring(&request.url[0]))
+    url_copy := strings.clone(strings.to_string(request.url))
     defer delete(url_copy)
     path_end := len(url_copy)
     for i := 0; i < len(url_copy); i += 1 {
@@ -3337,10 +3313,9 @@ request_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) -> 
                 method_str_upper := strings.to_upper(method_str)
                 defer delete(method_str_upper)
                 io.write_quoted_string(w, method_str_upper) or_return
-            case [4096]u8:
-                cstr := ((cast(^[4096]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
+            case strings.Builder:
+                builder := ((cast(^strings.Builder)(data))^)
+                str := strings.to_string(builder)
                 io.write_quoted_string(w, str) or_return
             case [dynamic]RequestHeader:
                 headers := ((cast(^[dynamic]RequestHeader)(data))^)
@@ -3481,10 +3456,8 @@ workspace_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) -
             case i64:
                 id := ((cast(^i64)(data))^)
                 io.write_i64(w, id) or_return
-            case [64]u8:
-                cstr := ((cast(^[64]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
+            case string:
+                str := ((cast(^string)(data))^)
                 io.write_quoted_string(w, str) or_return
             case [dynamic]^Collection:
                 collections := ((cast(^[dynamic]^Collection)(data))^)
@@ -3992,7 +3965,7 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
         } else {
             log.error("Failed to retrieve request method from config. Defaulting to GET")
         }
-        copy(request.url[:], url[:])
+        strings.write_string(&request.url, url)
 
         #partial switch v in body {
         case json.Null: // no-op
@@ -4199,7 +4172,7 @@ workspace_unmarshaller :: proc(p: ^json.Parser, v: any) -> json.Unmarshal_Error 
 
         workspace.id = id
         workspace.selected_environment_id = -1
-        copy(workspace.name[:], name[:])
+        workspace.name = strings.clone(name)
 
         if has_selected_environment_id {
             workspace.selected_environment_id = selected_environment_id.(json.Integer) or_else -1
@@ -4464,7 +4437,7 @@ lookup_environment_variable_value :: proc(key: string) -> (string, bool) {
 build_final_request_url :: proc(request: ^Request, effective_auth: Authorization, allocator := context.allocator) -> string {
     final_url := strings.builder_make_len_cap(0, 1024, allocator)
 
-    request_url := strings.trim_space(string(cstring(&request.url[0])))
+    request_url := strings.trim_space(strings.to_string(request.url))
     resolved_request_url, request_url_changed := resolve_environment_variables(request_url, allocator)
     defer if request_url_changed {
         delete(resolved_request_url)
@@ -4678,14 +4651,8 @@ resolve_environment_variables :: proc(raw: string, allocator := context.allocato
 }
 
 send_request :: proc(request: ^Request) {
-    // request_index := qt.qvariant_toInt(argv[1])
-    // assert(request_index >= 0 && request_index < cast(i32)len(state.tabs))
-
-    // request := state.tabs[request_index].(^Request)
-
     if request.status == .Running {
         return
-        // break signal_switch
     }
 
     handle := curl.easy_init()
@@ -4700,22 +4667,6 @@ send_request :: proc(request: ^Request) {
         delete(header.value)
     }
     clear(&request.response.headers)
-    // if request.response_headers_model != nil {
-    //     qt.qabstractitemmodel_beginResetModel(cast(^qt.QAbstractItemModel)request.response_headers_model)
-    //     qt.qabstractitemmodel_endResetModel(cast(^qt.QAbstractItemModel)request.response_headers_model)
-    // }
-
-    // { // Let Qt know we updated the status
-    //     roles := [?]i32{
-    //         cast(i32)RequestListRoles.Status,
-    //     }
-
-    //     parent := qt.qmodelindex_create()
-    //     defer qt.qmodelindex_delete(parent)
-    //     index := qt.qabstractlistmodel_index(requests_list_model, request_index, 0, parent)
-    //     defer qt.qmodelindex_delete(index)
-    //     qt.qabstractitemmodel_dataChanged(cast(^qt.QAbstractItemModel)requests_list_model, index, index, raw_data(roles[:]), cast(i32)len(roles))
-    // }
 
     if request.response.pretty_data.buf == nil {
         strings.builder_init(&request.response.pretty_data)
@@ -5043,16 +4994,6 @@ send_request :: proc(request: ^Request) {
         if err != nil {
             request.status = .Error
 
-            // roles := [?]i32{
-            //     cast(i32)RequestListRoles.Status,
-            //     cast(i32)RequestListRoles.ResponseData,
-            // }
-
-            // parent := qt.qmodelindex_create()
-            // defer qt.qmodelindex_delete(parent)
-            // index := qt.qabstractlistmodel_index(requests_list_model, request_index, 0, parent)
-            // defer qt.qmodelindex_delete(index)
-
             switch err {
             case .Not_Exist:
                 msg := fmt.aprintf("File \"%v\" specified in the body doesn't exist", request.body.binary_path)
@@ -5067,7 +5008,6 @@ send_request :: proc(request: ^Request) {
                 strings.write_string(&request.response.data, "Unknown error")
             }
 
-            // qt.qabstractitemmodel_dataChanged(cast(^qt.QAbstractItemModel)requests_list_model, index, index, raw_data(roles[:]), cast(i32)len(roles))
             return
         }
 
@@ -5076,18 +5016,6 @@ send_request :: proc(request: ^Request) {
             request.status = .Error
 
             log.errorf("Failed to stat file \"%s\": %v", request.body.binary_path, stat_err)
-
-            // roles := [?]i32{
-            //     cast(i32)RequestListRoles.Status,
-            //     cast(i32)RequestListRoles.ResponseData,
-            // }
-
-            // parent := qt.qmodelindex_create()
-            // defer qt.qmodelindex_delete(parent)
-            // index := qt.qabstractlistmodel_index(requests_list_model, request_index, 0, parent)
-            // defer qt.qmodelindex_delete(index)
-
-            // qt.qabstractitemmodel_dataChanged(cast(^qt.QAbstractItemModel)requests_list_model, index, index, raw_data(roles[:]), cast(i32)len(roles))
 
             return
         }
@@ -5300,7 +5228,7 @@ delete_collection :: proc(collection: ^Collection, collection_workspace_idx: int
 hash_request :: proc(request: ^Request) -> u128 {
     xxhash.XXH3_128_update(state.hasher, request.name[:len(cstring(&request.name[0]))])
     xxhash.XXH3_128_update(state.hasher, {cast(u8)request.method})
-    xxhash.XXH3_128_update(state.hasher, request.url[:len(cstring(&request.url[0]))])
+    xxhash.XXH3_128_update(state.hasher, transmute([]u8)strings.to_string(request.url)[:])
     for &param in request.query_params {
         xxhash.XXH3_128_update(state.hasher, param.key[:len(cstring(&param.key[0]))])
         xxhash.XXH3_128_update(state.hasher, {cast(u8)param.disabled})

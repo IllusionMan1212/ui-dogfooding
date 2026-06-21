@@ -24,6 +24,7 @@ Next on the list:-
 - [ ] Auto scroll the tabbar to the active tab (when creating a new one and when making it active) when it's out of view
 - [ ] Ctrl + L for focusing URL field shortcut
     - Shortcuts in general need a good system
+    - Need a way to isolate shortcuts for different components/UI
 
 - UI:
     - [ ] We have to assert or something when the stack pushes and pops don't match up. A lot of times I forget to pop something or push something too many times and styles leak.
