@@ -1464,7 +1464,7 @@ draw_collections_list :: proc() {
                 engine.ui_set_next_text_align(.Center)
                 engine.ui_text_wrapped("Create a new collection or import one to get started")
 
-                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
 
                 width := engine.ui_text_measure_string("New Collection").x + THEME_SPACING_MD
 
@@ -1797,7 +1797,7 @@ draw_environments_list :: proc() {
                 engine.ui_set_next_text_align(.Center)
                 engine.ui_text_wrapped("Create a new environment or import one to get started")
 
-                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
 
                 width := engine.ui_text_measure_string("New Environment").x + THEME_SPACING_MD
 
