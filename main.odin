@@ -773,6 +773,7 @@ draw_topbar :: proc() {
 
                     if draw_button("Create Workspace", variant = .LinkColored, size = .Small, left_icon = .Plus) {
                         strings.builder_reset(&state.workspace_name_builder)
+                        engine.ui_popup_close()
                         engine.ui_dialog_open(WORKSPACE_CREATE_DIALOG_ID)
                         engine.ui_focus_text_input(WORKSPACE_CREATE_NAME_INPUT_ID)
                     }
