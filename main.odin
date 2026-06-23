@@ -52,6 +52,23 @@ WORKSPACE_RENAME_NAME_INPUT_ID :: #hash("rename_workspace_name_input", "fnv32a")
 WORKSPACE_DELETE_DIALOG_ID :: #hash("delete_workspace_dialog", "fnv32a")
 COLLECTION_CREATE_DIALOG_ID :: #hash("create_collection_dialog", "fnv32a")
 COLLECTION_CREATE_NAME_INPUT_ID :: #hash("create_collection_name_input", "fnv32a")
+COLLECTION_RENAME_DIALOG_ID :: #hash("rename_collection_dialog", "fnv32a")
+COLLECTION_RENAME_NAME_INPUT_ID :: #hash("rename_collection_name_input", "fnv32a")
+COLLECTION_DELETE_DIALOG_ID :: #hash("delete_collection_dialog", "fnv32a")
+COLLECTION_MOVE_DIALOG_ID :: #hash("move_collection_dialog", "fnv32a")
+WORKSPACE_MOVE_PICKER_ID :: #hash("workspace_move_picker", "fnv32a")
+REQUEST_RENAME_DIALOG_ID :: #hash("rename_request_dialog", "fnv32a")
+REQUEST_RENAME_NAME_INPUT_ID :: #hash("rename_request_name_input", "fnv32a")
+REQUEST_DELETE_DIALOG_ID :: #hash("delete_request_dialog", "fnv32a")
+ENVIRONMENT_CREATE_DIALOG_ID :: #hash("create_environment_dialog", "fnv32a")
+ENVIRONMENT_CREATE_NAME_INPUT_ID :: #hash("create_environment_name_input", "fnv32a")
+ENVIRONMENT_RENAME_DIALOG_ID :: #hash("rename_environment_dialog", "fnv32a")
+ENVIRONMENT_RENAME_NAME_INPUT_ID :: #hash("rename_environment_name_input", "fnv32a")
+ENVIRONMENT_DELETE_DIALOG_ID :: #hash("delete_environment_dialog", "fnv32a")
+ENVIRONMENT_MOVE_DIALOG_ID :: #hash("move_environment_dialog", "fnv32a")
+SIDEBAR_COLLECTION_CONTEXT_MENU_ID :: #hash("sidebar_collection_context_menu", "fnv32a")
+SIDEBAR_REQUEST_CONTEXT_MENU_ID :: #hash("sidebar_request_context_menu", "fnv32a")
+SIDEBAR_ENVIRONMENT_CONTEXT_MENU_ID :: #hash("sidebar_environment_context_menu", "fnv32a")
 SETTINGS_DIALOG_ID :: #hash("settings_dialog", "fnv32a")
 ABOUT_DIALOG_ID :: #hash("about_dialog", "fnv32a")
 
@@ -438,12 +455,30 @@ State :: struct {
     // Workspace creation/rename dialog state
     workspace_name_builder: strings.Builder,
 
-    // Collection creation dialog state
+    // Collection creation/rename dialog state
     collection_name_builder: strings.Builder,
     collection_creation_parent: ^Collection, // nil when creating a root-level collection
 
     // Workspace rename/delete dialog state
     workspace_target_idx: int,
+
+    // Sidebar context menu (collections/requests/environments)
+    context_menu_collection: ^Collection, // owning collection for requests, or the target collection
+    context_menu_request_id: i64,
+    context_menu_environment_idx: int,
+
+    // Collection rename/delete/move dialog state
+    collection_target: ^Collection,
+    move_target_workspace_idx: int,
+
+    // Request rename/delete dialog state
+    request_target_collection: ^Collection,
+    request_target_id: i64,
+    request_name_builder: strings.Builder,
+
+    // Environment create/rename/delete/move dialog state
+    environment_name_builder: strings.Builder,
+    environment_target_idx: int,
 }
 
 logger: log.Logger
@@ -850,7 +885,7 @@ draw_dialog :: proc(id: engine.Id, width: f32 = 400, x: f32 = -1, y: f32 = 150, 
         engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
         engine.ui_set_next_flags({.DrawBackground})
         engine.ui_column(); {
-            engine.ui_padding(24, {.Top, .Bottom, .Left, .Right})
+            engine.ui_padding(THEME_SPACING_LG, {.Top, .Bottom, .Left, .Right})
 
             draw_content()
         }
@@ -940,6 +975,604 @@ draw_collection_create_dialog :: proc() {
         if draw_button("Create", enabled = strings.trim_space(strings.to_string(state.collection_name_builder)) != "") {
             create_collection()
             engine.ui_dialog_close()
+        }
+    })
+}
+
+draw_context_menu_item :: proc(id_str: string, label: string, danger := false) -> bool {
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_children_sum(1))
+    engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+    engine.ui_set_next_align_y(.Center)
+    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+
+    box := engine.ui_row(engine.ui_make_id(id_str))
+    sig := engine.ui_signal_from_box(box)
+    {
+        if engine.ui_hovering(sig) {
+            engine.set_cursor(.HAND)
+            box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+        } else {
+            box.background_color = TRANSPARENT
+        }
+
+        engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
+        engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
+
+        engine.ui_set_next_text_color(engine.color_hex_rgb(danger ? THEME_TEXT_ERROR_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+        engine.ui_set_next_font_size(14)
+        engine.ui_text(label)
+    }
+
+    return engine.ui_clicked(sig)
+}
+
+sidebar_context_menu_style :: proc() {
+    engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
+    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+    engine.ui_set_next_border_thickness(0.5)
+    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+}
+
+draw_collection_context_menu :: proc() {
+    collection := state.context_menu_collection
+
+    sidebar_context_menu_style()
+    if engine.ui_popup_begin(SIDEBAR_COLLECTION_CONTEXT_MENU_ID, nil) {
+        engine.ui_set_next_width(engine.ui_px(176, 1))
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_column(); {
+            engine.ui_padding(THEME_SPACING_SM, {.Top, .Bottom, .Left, .Right})
+
+            if draw_context_menu_item("ctx_new_request", "New Request") {
+                create_collection_request(collection)
+                engine.ui_popup_close()
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            if draw_context_menu_item("ctx_new_folder", "New Folder") {
+                engine.ui_popup_close()
+                open_collection_create_dialog(collection)
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            if draw_context_menu_item("ctx_coll_rename", "Rename") {
+                engine.ui_popup_close()
+                open_collection_rename_dialog(collection)
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            if draw_context_menu_item("ctx_coll_duplicate", "Duplicate") {
+                duplicate_collection(collection)
+                engine.ui_popup_close()
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            if draw_context_menu_item("ctx_coll_export", "Export") {
+                engine.ui_popup_close()
+                export_collection_via_dialog(collection)
+            }
+            if len(state.workspaces) > 1 {
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+                if draw_context_menu_item("ctx_coll_move", "Move to Workspace") {
+                    engine.ui_popup_close()
+                    open_collection_move_dialog(collection)
+                }
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            if draw_context_menu_item("ctx_coll_delete", "Delete", danger = true) {
+                engine.ui_popup_close()
+                state.collection_target = collection
+                engine.ui_dialog_open(COLLECTION_DELETE_DIALOG_ID)
+            }
+        }
+        engine.ui_popup_end()
+    }
+}
+
+draw_request_context_menu :: proc() {
+    collection := state.context_menu_collection
+    request_id := state.context_menu_request_id
+
+    sidebar_context_menu_style()
+    if engine.ui_popup_begin(SIDEBAR_REQUEST_CONTEXT_MENU_ID, nil) {
+        engine.ui_set_next_width(engine.ui_px(120, 1))
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_column(); {
+            engine.ui_padding(THEME_SPACING_SM, {.Top, .Bottom, .Left, .Right})
+
+            if draw_context_menu_item("ctx_req_rename", "Rename") {
+                engine.ui_popup_close()
+                open_request_rename_dialog(collection, request_id)
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            if draw_context_menu_item("ctx_req_duplicate", "Duplicate") {
+                duplicate_collection_request(collection, request_id)
+                engine.ui_popup_close()
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            if draw_context_menu_item("ctx_req_delete", "Delete", danger = true) {
+                engine.ui_popup_close()
+                state.request_target_collection = collection
+                state.request_target_id = request_id
+                engine.ui_dialog_open(REQUEST_DELETE_DIALOG_ID)
+            }
+        }
+        engine.ui_popup_end()
+    }
+}
+
+draw_environment_context_menu :: proc() {
+    idx := state.context_menu_environment_idx
+
+    sidebar_context_menu_style()
+    if engine.ui_popup_begin(SIDEBAR_ENVIRONMENT_CONTEXT_MENU_ID, nil) {
+        engine.ui_set_next_width(engine.ui_px(176, 1))
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_column(); {
+            engine.ui_padding(THEME_SPACING_SM, {.Top, .Bottom, .Left, .Right})
+
+            if draw_context_menu_item("ctx_env_rename", "Rename") {
+                engine.ui_popup_close()
+                open_environment_rename_dialog(idx)
+            }
+            if len(state.workspaces) > 1 {
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+                if draw_context_menu_item("ctx_env_move", "Move to Workspace") {
+                    engine.ui_popup_close()
+                    open_environment_move_dialog(idx)
+                }
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            if draw_context_menu_item("ctx_env_export", "Export") {
+                engine.ui_popup_close()
+                export_environment_via_dialog(idx)
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            if draw_context_menu_item("ctx_env_delete", "Delete", danger = true) {
+                engine.ui_popup_close()
+                state.environment_target_idx = idx
+                engine.ui_dialog_open(ENVIRONMENT_DELETE_DIALOG_ID)
+            }
+        }
+        engine.ui_popup_end()
+    }
+}
+
+open_collection_rename_dialog :: proc(collection: ^Collection) {
+    state.collection_target = collection
+    strings.builder_reset(&state.collection_name_builder)
+    strings.write_string(&state.collection_name_builder, collection.name)
+    engine.ui_dialog_open(COLLECTION_RENAME_DIALOG_ID)
+    engine.ui_focus_text_input(COLLECTION_RENAME_NAME_INPUT_ID)
+    engine.ui_text_input_select_all(COLLECTION_RENAME_NAME_INPUT_ID)
+}
+
+draw_collection_rename_dialog :: proc() {
+    draw_dialog(COLLECTION_RENAME_DIALOG_ID, draw_content = proc() {
+        engine.ui_text_sized("Rename Collection", THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        result := draw_text_input(COLLECTION_RENAME_NAME_INPUT_ID, &state.collection_name_builder, .Medium, engine.TextInputOptions{placeholder = "Collection name", max_length = 64})
+        name := strings.trim_space(strings.to_string(state.collection_name_builder))
+        if result.submitted && name != "" && state.collection_target != nil {
+            rename_collection(state.collection_target, name)
+            engine.ui_dialog_close()
+        }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        if draw_button("Save", enabled = name != "") {
+            rename_collection(state.collection_target, name)
+            engine.ui_dialog_close()
+        }
+    })
+}
+
+draw_collection_delete_dialog :: proc() {
+    draw_dialog(COLLECTION_DELETE_DIALOG_ID, 480, draw_content = proc() {
+        name := state.collection_target != nil ? state.collection_target.name : ""
+        engine.ui_text_sized(fmt.tprintf("Delete \"%s\"?", name), THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+        engine.ui_text_wrapped("Are you sure you want to permanently delete this collection?")
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_set_next_align_y(.Center)
+        engine.ui_row(); {
+            if draw_button("Cancel", variant = .LinkColored) {
+                engine.ui_dialog_close()
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+            if draw_button("Delete") {
+                if state.collection_target != nil {
+                    delete_collection(state.collection_target, state.active_workspace_index)
+                    state.collection_target = nil
+                }
+                engine.ui_dialog_close()
+            }
+        }
+    })
+}
+
+open_collection_move_dialog :: proc(collection: ^Collection) {
+    state.collection_target = collection
+    state.move_target_workspace_idx = -1
+    for i in 0 ..< len(state.workspaces) {
+        if i != state.active_workspace_index {
+            state.move_target_workspace_idx = i
+            break
+        }
+    }
+    engine.ui_dialog_open(COLLECTION_MOVE_DIALOG_ID)
+}
+
+// Renders a dropdown selector (styled like the topbar workspace selector) that
+// opens a popup listing the selectable workspaces (excluding the active one) and
+// updates state.move_target_workspace_idx on click. dialog_width is the width of
+// the enclosing dialog, used to size the popup to match the selector.
+draw_workspace_picker :: proc(dialog_width: f32) {
+    selected_name := ""
+    if state.move_target_workspace_idx >= 0 && state.move_target_workspace_idx < len(state.workspaces) {
+        selected_name = state.workspaces[state.move_target_workspace_idx].name
+    }
+
+    selector_box: ^engine.Box
+
+    // Selector box (the collapsed dropdown showing the current target)
+    {
+        engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme]))
+        engine.ui_set_next_align_y(.Center)
+        engine.ui_set_next_flags({.DrawBackground, .DrawBorder, .MouseClickable})
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_set_next_border_thickness(0.5)
+        engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+        engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+        selector_box = engine.ui_row(WORKSPACE_MOVE_PICKER_ID); {
+            engine.ui_padding(6, {.Top, .Bottom})
+            engine.ui_padding(12, {.Left, .Right})
+
+            engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+            defer engine.ui_pop_text_color()
+
+            {
+                engine.ui_set_next_width(engine.ui_fill())
+                engine.ui_set_next_height(engine.ui_children_sum(1))
+                engine.ui_set_next_align_y(.Center)
+                engine.ui_row(); {
+                    engine.ui_set_next_font_size(14)
+                    engine.ui_text_shrinkable(selected_name)
+                }
+            }
+            engine.ui_spacer(engine.ui_px(12, 1))
+            engine.ui_text_sized(ICONS[.Chevron], 16)
+        }
+        sig := engine.ui_signal_from_box(selector_box)
+
+        if engine.ui_hovering(sig) {
+            engine.set_cursor(.HAND)
+            selector_box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+        }
+
+        if engine.ui_clicked(sig) {
+            engine.ui_popup_open(WORKSPACE_MOVE_PICKER_ID)
+        }
+    }
+
+    // Dropdown popup listing the selectable workspaces
+    {
+        engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
+        engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+        engine.ui_set_next_border_thickness(0.5)
+        engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+        engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+        if engine.ui_popup_begin(WORKSPACE_MOVE_PICKER_ID, selector_box) {
+            // Match the popup width to the selector, which fills the dialog's
+            // content area (dialog width minus draw_dialog's 24px side padding).
+            engine.ui_set_next_width(engine.ui_px(dialog_width - (2 * THEME_SPACING_LG), 1))
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_column(); {
+                engine.ui_padding(THEME_SPACING_SM, {.Top, .Bottom, .Left, .Right})
+
+                first := true
+                for &workspace, i in state.workspaces {
+                    if i == state.active_workspace_index {
+                        continue
+                    }
+
+                    if !first {
+                        engine.ui_spacer(engine.ui_px(6, 1))
+                    }
+                    first = false
+
+                    selected := i == state.move_target_workspace_idx
+
+                    engine.ui_set_next_width(engine.ui_fill())
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+                    engine.ui_set_next_align_y(.Center)
+                    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+
+                    box := engine.ui_row(engine.ui_make_id(fmt.tprintf("ws_pick_%d", workspace.id)))
+                    sig := engine.ui_signal_from_box(box)
+                    {
+                        if selected || engine.ui_hovering(sig) {
+                            if engine.ui_hovering(sig) {
+                                engine.set_cursor(.HAND)
+                            }
+                            box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+                        } else {
+                            box.background_color = TRANSPARENT
+                        }
+
+                        engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
+                        engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
+
+                        engine.ui_set_next_width(engine.ui_fill())
+                        engine.ui_set_next_height(engine.ui_children_sum(1))
+                        engine.ui_set_next_align_y(.Center)
+                        engine.ui_row(); {
+                            {
+                                engine.ui_set_next_width(engine.ui_fill())
+                                engine.ui_set_next_height(engine.ui_children_sum(1))
+                                engine.ui_set_next_align_y(.Center)
+                                engine.ui_row(); {
+                                    engine.ui_set_next_text_color(engine.color_hex_rgb(selected ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                                    engine.ui_set_next_font_size(14)
+                                    engine.ui_text_shrinkable(workspace.name)
+                                }
+                            }
+
+                            if selected {
+                                engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+                                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]))
+                                engine.ui_text_sized(ICONS[.Check], 16)
+                            }
+                        }
+                    }
+                    if engine.ui_clicked(sig) {
+                        state.move_target_workspace_idx = i
+                        engine.ui_popup_close()
+                    }
+                }
+            }
+
+            engine.ui_popup_end()
+        }
+    }
+}
+
+draw_collection_move_dialog :: proc() {
+    draw_dialog(COLLECTION_MOVE_DIALOG_ID, 480, draw_content = proc() {
+        name := state.collection_target != nil ? state.collection_target.name : ""
+        engine.ui_text_sized(fmt.tprintf("Move \"%s\"", name), THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+        engine.ui_text_wrapped("Move this collection to another workspace. It will appear there as a top-level collection.")
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+        draw_workspace_picker(480)
+
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_set_next_align_y(.Center)
+        engine.ui_row(); {
+            if draw_button("Cancel", variant = .LinkColored) {
+                engine.ui_dialog_close()
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+            can_move := state.move_target_workspace_idx >= 0 && state.move_target_workspace_idx != state.active_workspace_index
+            if draw_button("Move", enabled = can_move) {
+                if state.collection_target != nil {
+                    move_collection_to_workspace(state.collection_target, state.move_target_workspace_idx)
+                    state.collection_target = nil
+                }
+                engine.ui_dialog_close()
+            }
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Request rename / delete dialogs
+// ---------------------------------------------------------------------------
+
+open_request_rename_dialog :: proc(collection: ^Collection, request_id: i64) {
+    state.request_target_collection = collection
+    state.request_target_id = request_id
+    strings.builder_reset(&state.request_name_builder)
+    req, _ := find_collection_request(collection, request_id)
+    if req != nil {
+        strings.write_string(&state.request_name_builder, string(cstring(&req.name[0])))
+    }
+    engine.ui_dialog_open(REQUEST_RENAME_DIALOG_ID)
+    engine.ui_focus_text_input(REQUEST_RENAME_NAME_INPUT_ID)
+    engine.ui_text_input_select_all(REQUEST_RENAME_NAME_INPUT_ID)
+}
+
+draw_request_rename_dialog :: proc() {
+    draw_dialog(REQUEST_RENAME_DIALOG_ID, draw_content = proc() {
+        engine.ui_text_sized("Rename Request", THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        result := draw_text_input(REQUEST_RENAME_NAME_INPUT_ID, &state.request_name_builder, .Medium, engine.TextInputOptions{placeholder = "Request name", max_length = 127})
+        name := strings.trim_space(strings.to_string(state.request_name_builder))
+        if result.submitted && name != "" && state.request_target_collection != nil {
+            rename_collection_request(state.request_target_collection, state.request_target_id, name)
+            engine.ui_dialog_close()
+        }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        if draw_button("Save", enabled = name != "") {
+            rename_collection_request(state.request_target_collection, state.request_target_id, name)
+            engine.ui_dialog_close()
+        }
+    })
+}
+
+draw_request_delete_dialog :: proc() {
+    draw_dialog(REQUEST_DELETE_DIALOG_ID, 480, draw_content = proc() {
+        name := ""
+        if state.request_target_collection != nil {
+            req, _ := find_collection_request(state.request_target_collection, state.request_target_id)
+            if req != nil {
+                name = string(cstring(&req.name[0]))
+            }
+        }
+        engine.ui_text_sized(fmt.tprintf("Delete \"%s\"?", name), THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+        engine.ui_text_wrapped("Are you sure you want to permanently delete this request?")
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_set_next_align_y(.Center)
+        engine.ui_row(); {
+            if draw_button("Cancel", variant = .LinkColored) {
+                engine.ui_dialog_close()
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+            if draw_button("Delete") {
+                if state.request_target_collection != nil {
+                    delete_collection_request(state.request_target_collection, state.request_target_id)
+                    state.request_target_collection = nil
+                }
+                engine.ui_dialog_close()
+            }
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Environment create / rename / delete / move dialogs
+// ---------------------------------------------------------------------------
+
+open_environment_create_dialog :: proc() {
+    strings.builder_reset(&state.environment_name_builder)
+    engine.ui_dialog_open(ENVIRONMENT_CREATE_DIALOG_ID)
+    engine.ui_focus_text_input(ENVIRONMENT_CREATE_NAME_INPUT_ID)
+}
+
+draw_environment_create_dialog :: proc() {
+    draw_dialog(ENVIRONMENT_CREATE_DIALOG_ID, draw_content = proc() {
+        engine.ui_text_sized("Create Environment", THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        result := draw_text_input(ENVIRONMENT_CREATE_NAME_INPUT_ID, &state.environment_name_builder, .Medium, engine.TextInputOptions{placeholder = "Environment name", max_length = 63})
+        name := strings.trim_space(strings.to_string(state.environment_name_builder))
+        if result.submitted && name != "" {
+            create_environment(name)
+            engine.ui_dialog_close()
+        }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        if draw_button("Create", enabled = name != "") {
+            create_environment(name)
+            engine.ui_dialog_close()
+        }
+    })
+}
+
+open_environment_rename_dialog :: proc(idx: int) {
+    state.environment_target_idx = idx
+    strings.builder_reset(&state.environment_name_builder)
+    environments := state.workspaces[state.active_workspace_index].environments
+    if idx >= 0 && idx < len(environments) {
+        strings.write_string(&state.environment_name_builder, string(cstring(&environments[idx].name[0])))
+    }
+    engine.ui_dialog_open(ENVIRONMENT_RENAME_DIALOG_ID)
+    engine.ui_focus_text_input(ENVIRONMENT_RENAME_NAME_INPUT_ID)
+    engine.ui_text_input_select_all(ENVIRONMENT_RENAME_NAME_INPUT_ID)
+}
+
+draw_environment_rename_dialog :: proc() {
+    draw_dialog(ENVIRONMENT_RENAME_DIALOG_ID, draw_content = proc() {
+        engine.ui_text_sized("Rename Environment", THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        result := draw_text_input(ENVIRONMENT_RENAME_NAME_INPUT_ID, &state.environment_name_builder, .Medium, engine.TextInputOptions{placeholder = "Environment name", max_length = 63})
+        name := strings.trim_space(strings.to_string(state.environment_name_builder))
+        if result.submitted && name != "" {
+            rename_environment(state.environment_target_idx, name)
+            engine.ui_dialog_close()
+        }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        if draw_button("Save", enabled = name != "") {
+            rename_environment(state.environment_target_idx, name)
+            engine.ui_dialog_close()
+        }
+    })
+}
+
+draw_environment_delete_dialog :: proc() {
+    draw_dialog(ENVIRONMENT_DELETE_DIALOG_ID, 480, draw_content = proc() {
+        name := ""
+        environments := state.workspaces[state.active_workspace_index].environments
+        if state.environment_target_idx >= 0 && state.environment_target_idx < len(environments) {
+            name = string(cstring(&environments[state.environment_target_idx].name[0]))
+        }
+        engine.ui_text_sized(fmt.tprintf("Delete \"%s\"?", name), THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+        engine.ui_text_wrapped("Are you sure you want to permanently delete this environment?")
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_set_next_align_y(.Center)
+        engine.ui_row(); {
+            if draw_button("Cancel", variant = .LinkColored) {
+                engine.ui_dialog_close()
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+            if draw_button("Delete") {
+                delete_environment(state.environment_target_idx)
+                engine.ui_dialog_close()
+            }
+        }
+    })
+}
+
+open_environment_move_dialog :: proc(idx: int) {
+    state.environment_target_idx = idx
+    state.move_target_workspace_idx = -1
+    for i in 0 ..< len(state.workspaces) {
+        if i != state.active_workspace_index {
+            state.move_target_workspace_idx = i
+            break
+        }
+    }
+    engine.ui_dialog_open(ENVIRONMENT_MOVE_DIALOG_ID)
+}
+
+draw_environment_move_dialog :: proc() {
+    draw_dialog(ENVIRONMENT_MOVE_DIALOG_ID, 480, draw_content = proc() {
+        name := ""
+        environments := state.workspaces[state.active_workspace_index].environments
+        if state.environment_target_idx >= 0 && state.environment_target_idx < len(environments) {
+            name = string(cstring(&environments[state.environment_target_idx].name[0]))
+        }
+        engine.ui_text_sized(fmt.tprintf("Move \"%s\"", name), THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+        engine.ui_text_wrapped("Move this environment to another workspace.")
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+        draw_workspace_picker(480)
+
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_set_next_align_y(.Center)
+        engine.ui_row(); {
+            if draw_button("Cancel", variant = .LinkColored) {
+                engine.ui_dialog_close()
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+            can_move := state.move_target_workspace_idx >= 0 && state.move_target_workspace_idx != state.active_workspace_index
+            if draw_button("Move", enabled = can_move) {
+                move_environment_to_workspace(state.environment_target_idx, state.move_target_workspace_idx)
+                engine.ui_dialog_close()
+            }
         }
     })
 }
@@ -1477,7 +2110,7 @@ draw_collections_list :: proc() {
 
                 engine.ui_set_next_width(engine.ui_px(width, 1))
                 if draw_button("Import", variant = .SecondaryColored) {
-                    // TODO: import
+                    import_collection_via_dialog()
                 }
             }
         } else {
@@ -1493,7 +2126,7 @@ draw_collections_list :: proc() {
                     }
                     engine.ui_spacer(engine.ui_px(12, 1))
                     if draw_button("Import", .LinkColored, .Small) {
-                        // TODO: import
+                        import_collection_via_dialog()
                     }
                 }
             }
@@ -1578,70 +2211,79 @@ draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
 
             if engine.ui_hovering(sig) {
                 engine.ui_spacer(engine.ui_px(8, 1))
-                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
-                // TODO: should return signal or box so we can use it for hover and click
-                engine.ui_text_sized(ICONS[.LinkExternal], 16)
 
-                engine.ui_spacer(engine.ui_px(10, 1))
-
+                // Open collection in a tab
                 {
                     engine.ui_set_next_width(engine.ui_children_sum(1))
                     engine.ui_set_next_height(engine.ui_children_sum(1))
                     engine.ui_set_next_flags({.MouseClickable})
-
-                    id := engine.ui_make_id(fmt.tprintf("collection_%d_plus", collection.id))
-
-                    plus := engine.ui_row(id); {
-                        plus_sig := engine.ui_signal_from_box(plus)
-                        engine.ui_set_next_text_color(engine.color_hex_rgb(engine.ui_hovering(plus_sig) ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
-                        engine.ui_text_sized(ICONS[.Plus], 12)
-
-                        if engine.ui_clicked(plus_sig) {
-                            new_request_tab()
-
-                            request := state.tabs[len(state.tabs) - 1].(^Request)
-                            request.collection = collection
-
-                            collection_request := Request{}
-                            collection_request.id = request.id
-                            collection_request.method = request.method
-                            collection_request.modification_hash = request.modification_hash
-                            collection_request.collection = collection
-                            copy(collection_request.name[:], request.name[:])
-
-                            collection_request.query_params = make([dynamic]QueryParam, len(request.query_params))
-
-                            collection_request.headers = make([dynamic]RequestHeader, len(request.headers))
-                            copy(collection_request.headers[:], request.headers[:])
-
-                            collection_request.path_params = make(map[string]PathParam)
-                            for key, &value in request.path_params {
-                                new_value := PathParam{}
-                                copy(new_value.value[:], value.value[:])
-                                new_value.indices = make([dynamic]PathParamIndex, len(value.indices))
-                                copy(new_value.indices[:], value.indices[:])
-                                collection_request.path_params[strings.clone(key)] = new_value
-                            }
-
-                            append(&collection.requests, collection_request)
-                            state.active_tab_index = len(state.tabs) - 1
-                            collection.is_expanded = true
-
-                            save_workspaces()
+                    open_box := engine.ui_row(engine.ui_make_id(fmt.tprintf("collection_%d_open", collection.id))); {
+                        open_sig := engine.ui_signal_from_box(open_box)
+                        engine.ui_set_next_text_color(engine.color_hex_rgb(engine.ui_hovering(open_sig) ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                        engine.ui_text_sized(ICONS[.LinkExternal], 16)
+                        if engine.ui_hovering(open_sig) {
+                            engine.set_cursor(.HAND)
+                        }
+                        if engine.ui_clicked(open_sig) {
+                            open_collection_tab(collection)
                         }
                     }
                 }
 
                 engine.ui_spacer(engine.ui_px(10, 1))
 
-                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
-                // TODO: should return signal or box so we can use it for hover and click
-                engine.ui_text_sized(ICONS[.ThreeDots], 12)
+                // Add request to collection
+                {
+                    engine.ui_set_next_width(engine.ui_children_sum(1))
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_set_next_flags({.MouseClickable})
+                    plus := engine.ui_row(engine.ui_make_id(fmt.tprintf("collection_%d_plus", collection.id))); {
+                        plus_sig := engine.ui_signal_from_box(plus)
+                        engine.ui_set_next_text_color(engine.color_hex_rgb(engine.ui_hovering(plus_sig) ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                        engine.ui_text_sized(ICONS[.Plus], 12)
+                        if engine.ui_hovering(plus_sig) {
+                            engine.set_cursor(.HAND)
+                        }
+                        if engine.ui_clicked(plus_sig) {
+                            create_collection_request(collection)
+                        }
+                    }
+                }
+
+                engine.ui_spacer(engine.ui_px(10, 1))
+
+                // More actions (context menu)
+                {
+                    engine.ui_set_next_width(engine.ui_children_sum(1))
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_set_next_flags({.MouseClickable})
+                    more := engine.ui_row(engine.ui_make_id(fmt.tprintf("collection_%d_more", collection.id))); {
+                        more_sig := engine.ui_signal_from_box(more)
+                        engine.ui_set_next_text_color(engine.color_hex_rgb(engine.ui_hovering(more_sig) ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                        engine.ui_text_sized(ICONS[.ThreeDots], 12)
+                        if engine.ui_hovering(more_sig) {
+                            engine.set_cursor(.HAND)
+                        }
+                        if engine.ui_clicked(more_sig) {
+                            state.context_menu_collection = collection
+                            engine.ui_popup_open(SIDEBAR_COLLECTION_CONTEXT_MENU_ID)
+                        }
+                    }
+                }
             }
         }
 
         if engine.ui_clicked(sig) {
             collection.is_expanded = !collection.is_expanded
+        }
+
+        if engine.ui_hovering(sig) && engine.virt_mouse_button_has_been_pressed(.RIGHT) {
+            state.context_menu_collection = collection
+            engine.ui_popup_open(SIDEBAR_COLLECTION_CONTEXT_MENU_ID)
+        }
+
+        if engine.ui_popup_is_open(SIDEBAR_COLLECTION_CONTEXT_MENU_ID) && state.context_menu_collection == collection {
+            draw_collection_context_menu()
         }
     }
 
@@ -1666,13 +2308,13 @@ draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
                 draw_collection_item(child, indent_level + 1)
             }
             for &request in collection.requests {
-                draw_request_item(&request, indent_level + 1)
+                draw_request_item(&request, collection, indent_level + 1)
             }
         }
     }
 }
 
-draw_request_item :: proc(request: ^Request, indent_level := 0) {
+draw_request_item :: proc(request: ^Request, collection: ^Collection, indent_level := 0) {
     name := string(cstring(&request.name[0]))
     method := http_method_string(request.method)
 
@@ -1736,10 +2378,34 @@ draw_request_item :: proc(request: ^Request, indent_level := 0) {
 
         if engine.ui_hovering(sig) {
             engine.ui_spacer(engine.ui_px(8, 1))
-            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
-            // TODO: should return signal or box so we can use it for hover and click
-            engine.ui_text_sized(ICONS[.ThreeDots], 12)
+
+            engine.ui_set_next_width(engine.ui_children_sum(1))
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_flags({.MouseClickable})
+            more := engine.ui_row(engine.ui_make_id(fmt.tprintf("request_%d_more", request.id))); {
+                more_sig := engine.ui_signal_from_box(more)
+                engine.ui_set_next_text_color(engine.color_hex_rgb(engine.ui_hovering(more_sig) ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                engine.ui_text_sized(ICONS[.ThreeDots], 12)
+                if engine.ui_hovering(more_sig) {
+                    engine.set_cursor(.HAND)
+                }
+                if engine.ui_clicked(more_sig) {
+                    state.context_menu_request_id = request.id
+                    state.context_menu_collection = collection
+                    engine.ui_popup_open(SIDEBAR_REQUEST_CONTEXT_MENU_ID)
+                }
+            }
         }
+    }
+
+    if engine.ui_hovering(sig) && engine.virt_mouse_button_has_been_pressed(.RIGHT) {
+        state.context_menu_request_id = request.id
+        state.context_menu_collection = collection
+        engine.ui_popup_open(SIDEBAR_REQUEST_CONTEXT_MENU_ID)
+    }
+
+    if engine.ui_popup_is_open(SIDEBAR_REQUEST_CONTEXT_MENU_ID) && state.context_menu_collection == collection && state.context_menu_request_id == request.id {
+        draw_request_context_menu()
     }
 
     if engine.ui_clicked(sig) {
@@ -1803,14 +2469,14 @@ draw_environments_list :: proc() {
 
                 engine.ui_set_next_width(engine.ui_px(width, 1))
                 if draw_button("New Environment", variant = .Primary) {
-                    // TODO: new environment dialog
+                    open_environment_create_dialog()
                 }
 
                 engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
 
                 engine.ui_set_next_width(engine.ui_px(width, 1))
                 if draw_button("Import", variant = .SecondaryColored) {
-                    // TODO: import
+                    import_environment_via_dialog()
                 }
             }
         } else {
@@ -1821,11 +2487,11 @@ draw_environments_list :: proc() {
                 engine.ui_set_next_height(engine.ui_children_sum(1))
                 engine.ui_row(); {
                     if draw_button("New", .LinkColored, .Small, left_icon = .Plus) {
-                        // TODO: new environments dialog
+                        open_environment_create_dialog()
                     }
                     engine.ui_spacer(engine.ui_px(12, 1))
                     if draw_button("Import", .LinkColored, .Small) {
-                        // TODO: import
+                        import_environment_via_dialog()
                     }
                 }
             }
@@ -1835,15 +2501,15 @@ draw_environments_list :: proc() {
             engine.ui_set_next_width(engine.ui_fill())
             engine.ui_set_next_height(engine.ui_fill())
             engine.ui_column(); {
-                for &environment in state.workspaces[state.active_workspace_index].environments {
-                    draw_environment_item(&environment)
+                for &environment, i in state.workspaces[state.active_workspace_index].environments {
+                    draw_environment_item(&environment, i)
                 }
             }
         }
     }
 }
 
-draw_environment_item :: proc(environment: ^Environment) {
+draw_environment_item :: proc(environment: ^Environment, index: int) {
     name := string(cstring(&environment.name[0]))
 
     engine.ui_set_next_align_x(.Start)
@@ -1889,10 +2555,98 @@ draw_environment_item :: proc(environment: ^Environment) {
 
         if engine.ui_hovering(sig) {
             engine.ui_spacer(engine.ui_px(8, 1))
-            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
-            // TODO: should return signal or box so we can use it for hover and click
-            engine.ui_text_sized(ICONS[.ThreeDots], 12)
+
+            engine.ui_set_next_width(engine.ui_children_sum(1))
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_flags({.MouseClickable})
+            more := engine.ui_row(engine.ui_make_id(fmt.tprintf("environment_%d_more", environment.id))); {
+                more_sig := engine.ui_signal_from_box(more)
+                engine.ui_set_next_text_color(engine.color_hex_rgb(engine.ui_hovering(more_sig) ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                engine.ui_text_sized(ICONS[.ThreeDots], 12)
+                if engine.ui_hovering(more_sig) {
+                    engine.set_cursor(.HAND)
+                }
+                if engine.ui_clicked(more_sig) {
+                    state.context_menu_environment_idx = index
+                    engine.ui_popup_open(SIDEBAR_ENVIRONMENT_CONTEXT_MENU_ID)
+                }
+            }
         }
+
+        if engine.ui_clicked(sig) {
+            open_environment_tab(index)
+        }
+
+        if engine.ui_hovering(sig) && engine.virt_mouse_button_has_been_pressed(.RIGHT) {
+            state.context_menu_environment_idx = index
+            engine.ui_popup_open(SIDEBAR_ENVIRONMENT_CONTEXT_MENU_ID)
+        }
+    }
+
+    if engine.ui_popup_is_open(SIDEBAR_ENVIRONMENT_CONTEXT_MENU_ID) && state.context_menu_environment_idx == index {
+        draw_environment_context_menu()
+    }
+}
+
+draw_collection_main_area :: proc(collection: ^Collection) {
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_fill())
+    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme]))
+    engine.ui_set_next_flags({.DrawBackground})
+    engine.ui_column(); {
+        engine.ui_padding(24, {.Top, .Bottom, .Left, .Right})
+
+        {
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_align_y(.Center)
+            engine.ui_row(); {
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]))
+                engine.ui_text_sized(ICONS[.Folder], 24)
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+                engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+                engine.ui_text_shrinkable(collection.name)
+            }
+        }
+
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+        BORDER_H()
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+
+        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+        engine.ui_text("Collection-level authorization settings coming soon.")
+    }
+}
+
+draw_environment_main_area :: proc(environment: ^Environment) {
+    name := string(cstring(&environment.name[0]))
+
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_fill())
+    engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT[state.config.theme]))
+    engine.ui_set_next_flags({.DrawBackground})
+    engine.ui_column(); {
+        engine.ui_padding(24, {.Top, .Bottom, .Left, .Right})
+
+        {
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_align_y(.Center)
+            engine.ui_row(); {
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]))
+                engine.ui_text_sized(ICONS[.Environment], 24)
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+                engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+                engine.ui_text_shrinkable(name)
+            }
+        }
+
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+        BORDER_H()
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_LG, 1))
+
+        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+        engine.ui_text(fmt.tprintf("%d variable%s. Variable editor coming soon.", len(environment.variables), len(environment.variables) == 1 ? "" : "s"))
     }
 }
 
@@ -2104,8 +2858,10 @@ draw_tab_bar :: proc() {
                         draw_tab_item_request(t, index)
                     case ^Environment:
                         // TODO:
+                        engine.ui_text(string(cstring(&t.name[0])))
                     case ^Collection:
                         // TODO:
+                        engine.ui_text(t.name)
                     }
                 }
             }
@@ -2160,9 +2916,9 @@ draw_main_area :: proc() {
             case ^Request:
                 draw_request_main_area(tab)
             case ^Collection:
-                // draw_collection_main_area(tab)
+                draw_collection_main_area(tab)
             case ^Environment:
-                // draw_environment_main_area(tab)
+                draw_environment_main_area(tab)
             }
         }
     }
@@ -5356,6 +6112,562 @@ delete_collection :: proc(collection: ^Collection, collection_workspace_idx: int
     free(collection, state.collection_allocator)
 }
 
+rename_collection :: proc(collection: ^Collection, new_name: string) {
+    name := strings.trim_space(new_name)
+    if name == "" {
+        return
+    }
+
+    // Names are arena-allocated; the old allocation is reclaimed when the arena is freed.
+    collection.name = strings.clone(name, state.collection_allocator)
+
+    save_workspaces()
+}
+
+clone_collection :: proc(src: ^Collection, parent: ^Collection) -> ^Collection {
+    dst := new(Collection, state.collection_allocator)
+    dst.id = rand.int63()
+    dst.name = strings.clone(src.name, state.collection_allocator)
+    dst.auth = src.auth
+    dst.parent = parent
+    dst.is_expanded = src.is_expanded
+    dst.requests = make([dynamic]Request, state.collection_allocator)
+
+    for &req in src.requests {
+        new_req := Request{}
+        new_req.body.text = strings.builder_make_len_cap(0, 0)
+        copy_request_data(&new_req, &req)
+        new_req.id = rand.int63()
+        new_req.collection = dst
+        append(&dst.requests, new_req)
+    }
+
+    for child := src.first; child != nil; child = child.next {
+        clone := clone_collection(child, dst)
+        if dst.first == nil {
+            dst.first = clone
+            dst.last = clone
+        } else {
+            dst.last.next = clone
+            clone.prev = dst.last
+            dst.last = clone
+        }
+    }
+
+    return dst
+}
+
+duplicate_collection :: proc(collection: ^Collection) {
+    dup := clone_collection(collection, collection.parent)
+
+    if collection.parent == nil {
+        append(&state.workspaces[state.active_workspace_index].collections, dup)
+    } else {
+        parent := collection.parent
+        if parent.first == nil {
+            parent.first = dup
+            parent.last = dup
+        } else {
+            parent.last.next = dup
+            dup.prev = parent.last
+            parent.last = dup
+        }
+        parent.is_expanded = true
+    }
+
+    save_workspaces()
+}
+
+move_collection_to_workspace :: proc(collection: ^Collection, dst_workspace_idx: int) {
+    src_workspace_idx := state.active_workspace_index
+    if dst_workspace_idx == src_workspace_idx || dst_workspace_idx < 0 || dst_workspace_idx >= len(state.workspaces) {
+        return
+    }
+
+    // Detach from its current parent (linked list) or from the root collections slice.
+    if collection.parent != nil {
+        parent := collection.parent
+        if parent.first == collection {
+            parent.first = collection.next
+        }
+        if parent.last == collection {
+            parent.last = collection.prev
+        }
+        if collection.prev != nil {
+            collection.prev.next = collection.next
+        }
+        if collection.next != nil {
+            collection.next.prev = collection.prev
+        }
+    } else {
+        for c, i in state.workspaces[src_workspace_idx].collections {
+            if c == collection {
+                ordered_remove(&state.workspaces[src_workspace_idx].collections, i)
+                break
+            }
+        }
+    }
+
+    collection.parent = nil
+    collection.prev = nil
+    collection.next = nil
+
+    // It appears as a top-level collection in the destination workspace.
+    append(&state.workspaces[dst_workspace_idx].collections, collection)
+
+    save_workspaces()
+}
+
+find_collection_request :: proc(collection: ^Collection, request_id: i64) -> (^Request, int) {
+    for &req, i in collection.requests {
+        if req.id == request_id {
+            return &collection.requests[i], i
+        }
+    }
+    return nil, -1
+}
+
+rename_collection_request :: proc(collection: ^Collection, request_id: i64, new_name: string) {
+    name := strings.trim_space(new_name)
+    if name == "" {
+        return
+    }
+
+    req, _ := find_collection_request(collection, request_id)
+    if req == nil {
+        return
+    }
+
+    mem.zero_item(&req.name)
+    copy(req.name[:127], name)
+
+    // Keep any open tab for this request in sync.
+    for tab in state.tabs {
+        r, is_request := tab.(^Request)
+        if is_request && r.id == request_id {
+            mem.zero_item(&r.name)
+            copy(r.name[:127], name)
+        }
+    }
+
+    save_workspaces()
+}
+
+duplicate_collection_request :: proc(collection: ^Collection, request_id: i64) {
+    src, _ := find_collection_request(collection, request_id)
+    if src == nil {
+        return
+    }
+
+    new_req := Request{}
+    new_req.body.text = strings.builder_make_len_cap(0, 0)
+    copy_request_data(&new_req, src)
+    new_req.id = rand.int63()
+    new_req.collection = collection
+    append(&collection.requests, new_req)
+
+    save_workspaces()
+}
+
+delete_collection_request :: proc(collection: ^Collection, request_id: i64) {
+    _, idx := find_collection_request(collection, request_id)
+    if idx < 0 {
+        return
+    }
+
+    // Detach any open tab pointing at this request so it becomes a standalone request.
+    for tab in state.tabs {
+        r, is_request := tab.(^Request)
+        if is_request && r.id == request_id {
+            r.collection = nil
+            r.is_modified = true
+            r.modification_hash = 0
+        }
+    }
+
+    destroy_request(&collection.requests[idx])
+    ordered_remove(&collection.requests, idx)
+
+    save_workspaces()
+}
+
+create_collection_request :: proc(collection: ^Collection) {
+    new_request_tab()
+
+    request := state.tabs[len(state.tabs) - 1].(^Request)
+    request.collection = collection
+
+    collection_request := Request{}
+    collection_request.body.text = strings.builder_make_len_cap(0, 0)
+    copy_request_data(&collection_request, request)
+    collection_request.id = request.id
+    collection_request.collection = collection
+
+    append(&collection.requests, collection_request)
+    state.active_tab_index = len(state.tabs) - 1
+    collection.is_expanded = true
+
+    save_workspaces()
+}
+
+open_collection_tab :: proc(collection: ^Collection) {
+    for tab, i in state.tabs {
+        c, is_collection := tab.(^Collection)
+        if is_collection && c == collection {
+            state.active_tab_index = i
+            return
+        }
+    }
+
+    append(&state.tabs, collection)
+    state.active_tab_index = len(state.tabs) - 1
+}
+
+create_environment :: proc(name: string) {
+    trimmed := strings.trim_space(name)
+    if trimmed == "" {
+        return
+    }
+
+    environment := Environment{id = rand.int63()}
+    copy(environment.name[:63], trimmed)
+
+    append(&state.workspaces[state.active_workspace_index].environments, environment)
+
+    save_workspaces()
+}
+
+rename_environment :: proc(idx: int, new_name: string) {
+    name := strings.trim_space(new_name)
+    if name == "" {
+        return
+    }
+
+    environments := &state.workspaces[state.active_workspace_index].environments
+    if idx < 0 || idx >= len(environments) {
+        return
+    }
+
+    mem.zero_item(&environments[idx].name)
+    copy(environments[idx].name[:63], name)
+
+    save_workspaces()
+}
+
+delete_environment :: proc(idx: int) {
+    environments := &state.workspaces[state.active_workspace_index].environments
+    if idx < 0 || idx >= len(environments) {
+        return
+    }
+
+    env := &environments[idx]
+
+    // Close any open tab pointing at this environment.
+    for i := len(state.tabs) - 1; i >= 0; i -= 1 {
+        e, is_environment := state.tabs[i].(^Environment)
+        if is_environment && e == env {
+            ordered_remove(&state.tabs, i)
+            if state.active_tab_index >= i {
+                state.active_tab_index -= 1
+            }
+        }
+    }
+
+    if state.active_environment == env {
+        state.active_environment = nil
+    }
+
+    // If this environment was selected for the workspace, clear the selection.
+    if state.workspaces[state.active_workspace_index].selected_environment_id == env.id {
+        state.workspaces[state.active_workspace_index].selected_environment_id = -1
+    }
+
+    delete(env.variables)
+    ordered_remove(environments, idx)
+
+    save_workspaces()
+}
+
+move_environment_to_workspace :: proc(idx: int, dst_workspace_idx: int) {
+    src_workspace_idx := state.active_workspace_index
+    if dst_workspace_idx == src_workspace_idx || dst_workspace_idx < 0 || dst_workspace_idx >= len(state.workspaces) {
+        return
+    }
+
+    environments := &state.workspaces[src_workspace_idx].environments
+    if idx < 0 || idx >= len(environments) {
+        return
+    }
+
+    env := environments[idx]
+
+    // Close any open tab pointing at this environment, the pointer is about to be invalidated.
+    for i := len(state.tabs) - 1; i >= 0; i -= 1 {
+        e, is_environment := state.tabs[i].(^Environment)
+        if is_environment && e == &environments[idx] {
+            ordered_remove(&state.tabs, i)
+            if state.active_tab_index >= i {
+                state.active_tab_index -= 1
+            }
+        }
+    }
+
+    if state.active_environment == &environments[idx] {
+        state.active_environment = nil
+    }
+    was_selected := state.workspaces[src_workspace_idx].selected_environment_id == env.id
+    if was_selected {
+        state.workspaces[src_workspace_idx].selected_environment_id = -1
+    }
+
+    ordered_remove(environments, idx)
+    append(&state.workspaces[dst_workspace_idx].environments, env)
+
+    // Carry the active selection to its new home so moving the selected environment
+    // doesn't silently leave it deselected.
+    if was_selected {
+        state.workspaces[dst_workspace_idx].selected_environment_id = env.id
+    }
+
+    save_workspaces()
+}
+
+open_environment_tab :: proc(idx: int) {
+    environments := &state.workspaces[state.active_workspace_index].environments
+    if idx < 0 || idx >= len(environments) {
+        return
+    }
+
+    env := &environments[idx]
+
+    for tab, i in state.tabs {
+        e, is_environment := tab.(^Environment)
+        if is_environment && e == env {
+            state.active_tab_index = i
+            return
+        }
+    }
+
+    append(&state.tabs, env)
+    state.active_tab_index = len(state.tabs) - 1
+}
+
+JSON_FILE_FILTERS := []engine.FileFilter{
+    {name = "JSON files", pattern = "*.json"},
+    {name = "All files", pattern = "*"},
+}
+
+// Strips characters that are illegal in file names so an entity name can be used as a
+// default export filename.
+sanitize_export_file_name :: proc(name: string, fallback: string, allocator := context.allocator) -> string {
+    trimmed := strings.trim_space(name)
+    base := trimmed if trimmed != "" else fallback
+
+    sb := strings.builder_make(allocator)
+    for r in base {
+        switch r {
+        case '\\', '/', ':', '*', '?', '"', '<', '>', '|':
+            strings.write_rune(&sb, '_')
+        case:
+            strings.write_rune(&sb, r)
+        }
+    }
+    return strings.to_string(sb)
+}
+
+import_collection_from_file :: proc(file_path: string) -> bool {
+    scratch_arena: virtual.Arena
+    arena_err := virtual.arena_init_growing(&scratch_arena, mem.Megabyte)
+    if arena_err != nil {
+        log.error("Failed to initialize import scratch arena:", arena_err)
+        return false
+    }
+    defer virtual.arena_destroy(&scratch_arena)
+
+    scratch_allocator := virtual.arena_allocator(&scratch_arena)
+
+    data, read_err := os.read_entire_file(file_path, scratch_allocator)
+    if read_err != nil {
+        log.error("Failed to import collection: failed to read file:", file_path)
+        return false
+    }
+
+    schema, json_err := detect_collection_schema(data, scratch_allocator)
+    if json_err != nil {
+        log.error("Failed to import collection: failed to parse file:", json_err)
+        return false
+    }
+
+    switch schema {
+    case .Unknown:
+        log.infof("Failed to import collection \"%s\": Unknown schema", file_path)
+        return false
+    case .Postman:
+        collection, import_err := import_postman_collection(data, scratch_allocator)
+        if import_err != nil {
+            log.errorf("Failed to import Postman collection \"%s\": %v", file_path, import_err)
+            return false
+        }
+        append(&state.workspaces[state.active_workspace_index].collections, collection)
+    case .InsomniaV4:
+        collection, import_err := import_insomnia_v4_collection(data, scratch_allocator)
+        if import_err != nil {
+            log.errorf("Failed to import Insomnia (v4) collection \"%s\": %v", file_path, import_err)
+            return false
+        }
+        if collection == nil {
+            log.errorf("Failed to import Insomnia (v4) collection \"%s\": No workspace was found", file_path)
+            return false
+        }
+        append(&state.workspaces[state.active_workspace_index].collections, collection)
+    }
+
+    save_workspaces()
+    return true
+}
+
+export_collection_to_file :: proc(collection: ^Collection, file_path: string) -> bool {
+    scratch_arena: virtual.Arena
+    arena_err := virtual.arena_init_growing(&scratch_arena, mem.Megabyte)
+    if arena_err != nil {
+        log.error("Failed to initialize export scratch arena:", arena_err)
+        return false
+    }
+    defer virtual.arena_destroy(&scratch_arena)
+
+    scratch_allocator := virtual.arena_allocator(&scratch_arena)
+
+    postman_collection := export_collection_to_postman_v21(collection, scratch_allocator)
+
+    encoded_json, marshal_err := json.marshal(postman_collection, allocator = scratch_allocator)
+    if marshal_err != nil {
+        log.errorf("Failed to export collection \"%s\": %v", file_path, marshal_err)
+        return false
+    }
+
+    if write_err := os.write_entire_file(file_path, encoded_json); write_err != nil {
+        log.errorf("Failed to export collection \"%s\": %v", file_path, write_err)
+        return false
+    }
+
+    return true
+}
+
+append_environment :: proc(environment: Environment) {
+    append(&state.workspaces[state.active_workspace_index].environments, environment)
+}
+
+import_environment_from_file :: proc(file_path: string) -> bool {
+    scratch_arena: virtual.Arena
+    arena_err := virtual.arena_init_growing(&scratch_arena, mem.Megabyte)
+    if arena_err != nil {
+        log.error("Failed to initialize import scratch arena:", arena_err)
+        return false
+    }
+    defer virtual.arena_destroy(&scratch_arena)
+
+    scratch_allocator := virtual.arena_allocator(&scratch_arena)
+
+    data, read_err := os.read_entire_file(file_path, scratch_allocator)
+    if read_err != nil {
+        log.error("Failed to import environment: failed to read file:", file_path)
+        return false
+    }
+
+    schema, json_err := detect_environment_schema(data)
+    if json_err != nil {
+        log.error("Failed to import environment: failed to parse file:", json_err)
+        return false
+    }
+
+    switch schema {
+    case .Unknown, .InsomniaV4:
+        log.infof("Failed to import environment \"%s\": Unknown schema", file_path)
+        return false
+    case .Postman:
+        environment, import_err := import_postman_environment(data, scratch_allocator)
+        if import_err != nil {
+            log.errorf("Failed to import Postman environment \"%s\": %v", file_path, import_err)
+            return false
+        }
+        append_environment(environment)
+    }
+
+    save_workspaces()
+    return true
+}
+
+export_environment_to_file :: proc(environment: ^Environment, file_path: string) -> bool {
+    scratch_arena: virtual.Arena
+    arena_err := virtual.arena_init_growing(&scratch_arena, mem.Megabyte)
+    if arena_err != nil {
+        log.error("Failed to initialize export scratch arena:", arena_err)
+        return false
+    }
+    defer virtual.arena_destroy(&scratch_arena)
+
+    scratch_allocator := virtual.arena_allocator(&scratch_arena)
+
+    postman_environment := export_environment(environment, scratch_allocator)
+
+    encoded_json, marshal_err := json.marshal(postman_environment, allocator = scratch_allocator)
+    if marshal_err != nil {
+        log.errorf("Failed to export environment \"%s\": %v", file_path, marshal_err)
+        return false
+    }
+
+    if write_err := os.write_entire_file(file_path, encoded_json); write_err != nil {
+        log.errorf("Failed to export environment \"%s\": %v", file_path, write_err)
+        return false
+    }
+
+    return true
+}
+
+// Opens a native open-file dialog (multi-select) and imports each chosen collection file.
+import_collection_via_dialog :: proc() {
+    paths, ok := engine.file_dialog_open_multi("Import Collection", JSON_FILE_FILTERS, context.temp_allocator)
+    if !ok {
+        return
+    }
+    for path in paths {
+        import_collection_from_file(path)
+    }
+}
+
+// Opens a native save-file dialog and exports the collection to the chosen path.
+export_collection_via_dialog :: proc(collection: ^Collection) {
+    default_name := fmt.tprintf("%s.postman_collection.json", sanitize_export_file_name(collection.name, "collection", context.temp_allocator))
+    path, ok := engine.file_dialog_save("Export Collection", default_name, JSON_FILE_FILTERS, context.temp_allocator)
+    if !ok {
+        return
+    }
+    export_collection_to_file(collection, path)
+}
+
+import_environment_via_dialog :: proc() {
+    path, ok := engine.file_dialog_open("Import Environment", JSON_FILE_FILTERS, context.temp_allocator)
+    if !ok {
+        return
+    }
+    import_environment_from_file(path)
+}
+
+export_environment_via_dialog :: proc(idx: int) {
+    environments := &state.workspaces[state.active_workspace_index].environments
+    if idx < 0 || idx >= len(environments) {
+        return
+    }
+    env := &environments[idx]
+    name := string(cstring(&env.name[0]))
+    default_name := fmt.tprintf("%s.postman_environment.json", sanitize_export_file_name(name, "environment", context.temp_allocator))
+    path, ok := engine.file_dialog_save("Export Environment", default_name, JSON_FILE_FILTERS, context.temp_allocator)
+    if !ok {
+        return
+    }
+    export_environment_to_file(env, path)
+}
+
 hash_request :: proc(request: ^Request) -> u128 {
     xxhash.XXH3_128_update(state.hasher, request.name[:len(cstring(&request.name[0]))])
     xxhash.XXH3_128_update(state.hasher, {cast(u8)request.method})
@@ -5588,6 +6900,15 @@ main :: proc() {
             draw_workspace_rename_dialog()
             draw_workspace_delete_dialog()
             draw_collection_create_dialog()
+            draw_collection_rename_dialog()
+            draw_collection_delete_dialog()
+            draw_collection_move_dialog()
+            draw_request_rename_dialog()
+            draw_request_delete_dialog()
+            draw_environment_create_dialog()
+            draw_environment_rename_dialog()
+            draw_environment_delete_dialog()
+            draw_environment_move_dialog()
             draw_about_dialog()
             engine.ui_end_build()
 
