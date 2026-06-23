@@ -26,12 +26,17 @@ Next on the list:-
     - Shortcuts in general need a good system
     - Need a way to isolate shortcuts for different components/UI
 
+Claude reviews:
+- [ ] Importer/Exporter feature set(?) Have claude review them and see if we're missing values when importing/exporting.
+
 - Big Refactors:-
-    - [ ] Move away from fixed buffers for names and everything else.
+    - [x] Move away from fixed buffers for names and everything else.
     - [x] Better lifetime grouping for memory allocations.
 
 - UI:
     - [ ] We have to assert or something when the stack pushes and pops don't match up. A lot of times I forget to pop something or push something too many times and styles leak.
+    - [x] Empty state for collections/environment sidebar
+    - [ ] Migrate everything to use string builder with input limitations
 
 - [x] Dialog
     - [ ] Text drawn in dialogs gets drawn at the default size on the first frame, then the correct size on the second+ frames.
@@ -58,9 +63,6 @@ Next on the list:-
 
 Misc:
 - [ ] We should probably somehow generate the whole ui_push_* ui_pop_* ui_set_next_* procedures as well as their nodes.
-
-- [ ] Empty state for collections/environment sidebar
-- [ ] Migrate everything to use string builder with input limitations
 
 Optimizations:-
 - [x] Only rendering frames when something has visually changed

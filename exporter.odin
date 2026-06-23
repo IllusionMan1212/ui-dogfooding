@@ -86,16 +86,6 @@ PostmanExportRequest :: struct {
 }
 
 @(private="file")
-fixed_string :: #force_inline proc "contextless" (bytes: []u8) -> string {
-	end := 0
-	for end < len(bytes) && bytes[end] != 0 {
-		end += 1
-	}
-
-	return string(bytes[:end])
-}
-
-@(private="file")
 // auth is a pointer here so we're able to pass slices without copying the struct locally which ends with garbage data because of the fixed-size arrays.
 export_auth_to_postman :: proc(auth: ^Authorization, scratch_allocator: mem.Allocator) -> (postman_auth: Maybe(PostmanExportAuth)) {
 	if auth.type == .InheritFromParent {
@@ -112,7 +102,7 @@ export_auth_to_postman :: proc(auth: ^Authorization, scratch_allocator: mem.Allo
 		a.type = "apikey"
 		append(&fields, AuthField{
 			key = "key",
-			value = fixed_string(auth.api_key_key[:]),
+			value = auth.api_key_key,
 			type = "string",
 		})
 		append(&fields, AuthField{
@@ -122,7 +112,7 @@ export_auth_to_postman :: proc(auth: ^Authorization, scratch_allocator: mem.Allo
 		})
 		append(&fields, AuthField{
 			key = "value",
-			value = fixed_string(auth.api_key_value[:]),
+			value = auth.api_key_value,
 			type = "string",
 		})
 		a.apikey = fields
@@ -130,12 +120,12 @@ export_auth_to_postman :: proc(auth: ^Authorization, scratch_allocator: mem.Allo
 		a.type = "basic"
 		append(&fields, AuthField{
 			key = "username",
-			value = fixed_string(auth.basic_username[:]),
+			value = auth.basic_username,
 			type = "string",
 		})
 		append(&fields, AuthField{
 			key = "password",
-			value = fixed_string(auth.basic_password[:]),
+			value = auth.basic_password,
 			type = "string",
 		})
 		a.basic = fields
@@ -146,7 +136,7 @@ export_auth_to_postman :: proc(auth: ^Authorization, scratch_allocator: mem.Allo
 		a.type = "bearer"
 		append(&fields, AuthField{
 			key = "token",
-			value = fixed_string(auth.bearer_token[:]),
+			value = auth.bearer_token,
 			type = "string",
 		})
 		a.bearer = fields
@@ -164,8 +154,8 @@ export_collection_to_postman_v21 :: proc(collection: ^Collection, scratch_alloca
 		postman_req.method = http_method_string(req.method)
 
 		for &header in req.headers {
-			key := fixed_string(header.key[:])
-			value := fixed_string(header.value[:])
+			key := header.key
+			value := header.value
 			if key == "" && value == "" {
 				continue
 			}
@@ -240,8 +230,8 @@ export_collection_to_postman_v21 :: proc(collection: ^Collection, scratch_alloca
 		url.path = path
 
 		for &param in req.query_params {
-			key := fixed_string(param.key[:])
-			value := fixed_string(param.value[:])
+			key := param.key
+			value := param.value
 			if key == "" {
 				continue
 			}
@@ -258,7 +248,7 @@ export_collection_to_postman_v21 :: proc(collection: ^Collection, scratch_alloca
 			append(&url_variables, PostmanVariable{
 				id = key,
 				key = key,
-				value = fixed_string(path_param.value[:]),
+				value = path_param.value,
 				type = "string",
 				name = key,
 				system = false,
@@ -289,8 +279,8 @@ export_collection_to_postman_v21 :: proc(collection: ^Collection, scratch_alloca
 			body.mode = "urlencoded"
 			body.urlencoded = make([dynamic]PostmanUrlEncodedParameter, scratch_allocator)
 			for &field in req.body.structured {
-				key := fixed_string(field.key[:])
-				value := fixed_string(field.value[:])
+				key := field.key
+				value := field.value
 				if key == "" && value == "" {
 					continue
 				}
@@ -306,9 +296,9 @@ export_collection_to_postman_v21 :: proc(collection: ^Collection, scratch_alloca
 			body.mode = "formdata"
 			body.formdata = make([dynamic]PostmanFormParameter, scratch_allocator)
 			for &field in req.body.structured {
-				key := fixed_string(field.key[:])
-				value := fixed_string(field.value[:])
-				content_type := fixed_string(field.content_type[:])
+				key := field.key
+				value := field.value
+				content_type := field.content_type
 				if key == "" && value == "" && content_type == "" {
 					continue
 				}
@@ -343,7 +333,7 @@ export_collection_to_postman_v21 :: proc(collection: ^Collection, scratch_alloca
 		}
 
 		return PostmanExportRequestItem{
-			name = fixed_string(req.name[:]),
+			name = req.name,
 			request = postman_req,
 		}
 	}
@@ -385,14 +375,14 @@ export_environment :: proc(environment: ^Environment, scratch_allocator: mem.All
 	env.values = make([dynamic]PostmanEnvironmentVariable, scratch_allocator)
 	env.variable_scope = "environment"
 	env.exported_using = "moonladder-" + VERSION
-	env.name = fixed_string(environment.name[:])
+	env.name = environment.name
 
 	for &field in environment.variables {
 		var := PostmanEnvironmentVariable{}
 		var.enabled = field.enabled
 		var.type = "default"
-		var.key = fixed_string(field.variable[:])
-		var.value = fixed_string(field.value[:])
+		var.key = field.variable
+		var.value = field.value
 
 		append(&env.values, var)
 	}

@@ -155,26 +155,26 @@ TabItem :: union {
     ^Environment,
 }
 
-#assert(size_of(Authorization) == 2960)
+#assert(size_of(Authorization) == 112)
 Authorization :: struct {
     type:          AuthType,
-    basic_username: [128]u8  `fmt:"s,"`,
-    basic_password: [512]u8  `fmt:"s,"`,
-    bearer_token:   [1024]u8 `fmt:"s,"`,
-    bearer_prefix:  [128]u8  `fmt:"s,"`,
-    api_key_key:    [128]u8  `fmt:"s,"`,
-    api_key_value:  [1024]u8 `fmt:"s,"`,
+    basic_username: string,
+    basic_password: string,
+    bearer_token:   string,
+    bearer_prefix:  string,
+    api_key_key:    string,
+    api_key_value:  string,
     api_key_add_to: ApiKeyAddTo,
 }
 
 FormField :: struct {
     id: i64,
-    key: [512]u8 `fmt:"s,"`,
-    value: [1024]u8 `fmt:"s,"`,
+    key: string,
+    value: string,
     file_paths: [dynamic]string,
     disabled: bool,
     is_file: bool, // Only used for form-data.
-    content_type: [128]u8 `fmt:"s,"`, // Only used for form-data.
+    content_type: string, // Only used for form-data.
 }
 
 #assert(size_of(RequestBody) == 104)
@@ -185,11 +185,11 @@ RequestBody :: struct {
     binary_path: string,
 }
 
-#assert(size_of(RequestHeader) == 1552)
+#assert(size_of(RequestHeader) == 48)
 RequestHeader :: struct {
     id: i64,
-    key: [512]u8 `fmt:"s,"`,
-    value: [1024]u8 `fmt:"s,"`,
+    key: string,
+    value: string,
     disabled: bool,
 }
 
@@ -220,11 +220,11 @@ RequestResponseTab :: enum {
     Headers,
 }
 
-#assert(size_of(QueryParam) == 1552)
+#assert(size_of(QueryParam) == 48)
 QueryParam :: struct {
     id: i64,
-    key: [512]u8 `fmt:"s"`,
-    value: [1024]u8 `fmt:"s"`,
+    key: string,
+    value: string,
     disabled: bool,
 }
 
@@ -233,10 +233,10 @@ PathParamIndex :: struct {
     end: int,
 }
 
-#assert(size_of(PathParam) == 1064)
+#assert(size_of(PathParam) == 56)
 PathParam :: struct {
     indices: [dynamic]PathParamIndex,
-    value: [1024]u8 `fmt:"s,"`,
+    value: string,
 }
 
 #assert(size_of(Response) == 232)
@@ -255,17 +255,17 @@ Response :: struct {
     headers: [dynamic]ResponseHeader,
 }
 
-// #assert(size_of(Request) == 7648) // TODO: Update after adding tab_type field
+#assert(size_of(Request) == 736)
 Request :: struct {
     id: i64, // 8
-    name: [128]u8 `fmt:"s,"`, // 128
+    name: string, // Limited to 64 characters (NOT BYTES!).
     method: HttpMethod, // 8
     url: strings.Builder `fmt:"s,"`, // 40
     body: RequestBody, // 104
     query_params: [dynamic]QueryParam, // 40
     path_params: map[string]PathParam, // 32
     headers: [dynamic]RequestHeader, // 40
-    auth: Authorization, // 2832
+    auth: Authorization, // 112
     collection: ^Collection `json:"collection_id"`, // nil if standalone request. 8
     modification_hash: u128 `json:"-"`, // 16
 
@@ -280,9 +280,9 @@ Request :: struct {
     // Ephemeral UI state for this open request tab.
     active_options_tab: RequestOptionsTab `json:"-"`, // 8
     active_response_tab: RequestResponseTab `json:"-"`, // 8
-    query_params_bulk_edit: bool `json:"-"`,
-    headers_bulk_edit: bool `json:"-"`,
-    height: f32 `json:"-"`,
+    query_params_bulk_edit: bool `json:"-"`, // 8
+    headers_bulk_edit: bool `json:"-"`, // 8
+    height: f32 `json:"-"`, // 8
 }
 
 Collection :: struct {
@@ -299,14 +299,14 @@ Collection :: struct {
 }
 
 EnvironmentVariableField :: struct {
-    variable: [128]u8 `json:"variable"`,
-    value: [1024]u8 `json:"value"`,
+    variable: string `json:"variable"`,
+    value: string `json:"value"`,
     enabled: bool `json:"enabled"`,
 }
 
 Environment :: struct {
     id: i64,
-    name: [64]u8 `fmt:"s,"`,
+    name: string, // Limited to 64 characters (NOT BYTES!)
     variables: [dynamic]EnvironmentVariableField,
 }
 
@@ -1381,7 +1381,7 @@ open_request_rename_dialog :: proc(collection: ^Collection, request_id: i64) {
     strings.builder_reset(&state.request_name_builder)
     req, _ := find_collection_request(collection, request_id)
     if req != nil {
-        strings.write_string(&state.request_name_builder, string(cstring(&req.name[0])))
+        strings.write_string(&state.request_name_builder, req.name)
     }
     engine.ui_dialog_open(REQUEST_RENAME_DIALOG_ID)
     engine.ui_focus_text_input(REQUEST_RENAME_NAME_INPUT_ID)
@@ -1393,7 +1393,7 @@ draw_request_rename_dialog :: proc() {
         engine.ui_text_sized("Rename Request", THEME_FONT_SIZE_BODY_LG)
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_width(engine.ui_fill())
-        result := draw_text_input(REQUEST_RENAME_NAME_INPUT_ID, &state.request_name_builder, .Medium, engine.TextInputOptions{placeholder = "Request name", max_length = 127})
+        result := draw_text_input(REQUEST_RENAME_NAME_INPUT_ID, &state.request_name_builder, .Medium, engine.TextInputOptions{placeholder = "Request name", max_length = 64})
         name := strings.trim_space(strings.to_string(state.request_name_builder))
         if result.submitted && name != "" && state.request_target_collection != nil {
             rename_collection_request(state.request_target_collection, state.request_target_id, name)
@@ -1414,7 +1414,7 @@ draw_request_delete_dialog :: proc() {
         if state.request_target_collection != nil {
             req, _ := find_collection_request(state.request_target_collection, state.request_target_id)
             if req != nil {
-                name = string(cstring(&req.name[0]))
+                name = req.name
             }
         }
         engine.ui_text_sized(fmt.tprintf("Delete \"%s\"?", name), THEME_FONT_SIZE_BODY_LG)
@@ -1456,7 +1456,7 @@ draw_environment_create_dialog :: proc() {
         engine.ui_text_sized("Create Environment", THEME_FONT_SIZE_BODY_LG)
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_width(engine.ui_fill())
-        result := draw_text_input(ENVIRONMENT_CREATE_NAME_INPUT_ID, &state.environment_name_builder, .Medium, engine.TextInputOptions{placeholder = "Environment name", max_length = 63})
+        result := draw_text_input(ENVIRONMENT_CREATE_NAME_INPUT_ID, &state.environment_name_builder, .Medium, engine.TextInputOptions{placeholder = "Environment name", max_length = 64})
         name := strings.trim_space(strings.to_string(state.environment_name_builder))
         if result.submitted && name != "" {
             create_environment(name)
@@ -1476,7 +1476,7 @@ open_environment_rename_dialog :: proc(idx: int) {
     strings.builder_reset(&state.environment_name_builder)
     environments := state.workspaces[state.active_workspace_index].environments
     if idx >= 0 && idx < len(environments) {
-        strings.write_string(&state.environment_name_builder, string(cstring(&environments[idx].name[0])))
+        strings.write_string(&state.environment_name_builder, environments[idx].name)
     }
     engine.ui_dialog_open(ENVIRONMENT_RENAME_DIALOG_ID)
     engine.ui_focus_text_input(ENVIRONMENT_RENAME_NAME_INPUT_ID)
@@ -1488,7 +1488,7 @@ draw_environment_rename_dialog :: proc() {
         engine.ui_text_sized("Rename Environment", THEME_FONT_SIZE_BODY_LG)
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
         engine.ui_set_next_width(engine.ui_fill())
-        result := draw_text_input(ENVIRONMENT_RENAME_NAME_INPUT_ID, &state.environment_name_builder, .Medium, engine.TextInputOptions{placeholder = "Environment name", max_length = 63})
+        result := draw_text_input(ENVIRONMENT_RENAME_NAME_INPUT_ID, &state.environment_name_builder, .Medium, engine.TextInputOptions{placeholder = "Environment name", max_length = 64})
         name := strings.trim_space(strings.to_string(state.environment_name_builder))
         if result.submitted && name != "" {
             rename_environment(state.environment_target_idx, name)
@@ -1508,7 +1508,7 @@ draw_environment_delete_dialog :: proc() {
         name := ""
         environments := state.workspaces[state.active_workspace_index].environments
         if state.environment_target_idx >= 0 && state.environment_target_idx < len(environments) {
-            name = string(cstring(&environments[state.environment_target_idx].name[0]))
+            name = environments[state.environment_target_idx].name
         }
         engine.ui_text_sized(fmt.tprintf("Delete \"%s\"?", name), THEME_FONT_SIZE_BODY_LG)
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
@@ -1548,7 +1548,7 @@ draw_environment_move_dialog :: proc() {
         name := ""
         environments := state.workspaces[state.active_workspace_index].environments
         if state.environment_target_idx >= 0 && state.environment_target_idx < len(environments) {
-            name = string(cstring(&environments[state.environment_target_idx].name[0]))
+            name = environments[state.environment_target_idx].name
         }
         engine.ui_text_sized(fmt.tprintf("Move \"%s\"", name), THEME_FONT_SIZE_BODY_LG)
         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
@@ -2318,7 +2318,7 @@ draw_collection_item :: proc(collection: ^Collection, indent_level := 0) {
 }
 
 draw_request_item :: proc(request: ^Request, collection: ^Collection, indent_level := 0) {
-    name := string(cstring(&request.name[0]))
+    name := request.name
     method := http_method_string(request.method)
 
     engine.ui_set_next_align_x(.Start)
@@ -2513,7 +2513,7 @@ draw_environments_list :: proc() {
 }
 
 draw_environment_item :: proc(environment: ^Environment, index: int) {
-    name := string(cstring(&environment.name[0]))
+    name := environment.name
 
     engine.ui_set_next_align_x(.Start)
     engine.ui_set_next_align_y(.Center)
@@ -2622,7 +2622,7 @@ draw_collection_main_area :: proc(collection: ^Collection) {
 }
 
 draw_environment_main_area :: proc(environment: ^Environment) {
-    name := string(cstring(&environment.name[0]))
+    name := environment.name
 
     engine.ui_set_next_width(engine.ui_fill())
     engine.ui_set_next_height(engine.ui_fill())
@@ -2719,7 +2719,7 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
 
                 engine.ui_padding(12, {.Left, .Right})
 
-                name := string(cstring(&req.name[0]))
+                name := req.name
                 name_raw_w := engine.ui_text_measure_string(name, THEME_FONT_SIZE_BODY_SM).x
 
                 {
@@ -2803,7 +2803,7 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
         {
             method_str := http_method_string(req.method)
             method_w := engine.ui_text_measure_string(method_str, 10, 900).x
-            name := string(cstring(&req.name[0]))
+            name := req.name
             name_raw_w := engine.ui_text_measure_string(name, THEME_FONT_SIZE_BODY_SM).x
             name_w := min(name_raw_w, f32(80))
             close_icon_w := engine.ui_text_measure_string(ICONS[.Close], 14).x
@@ -2861,7 +2861,7 @@ draw_tab_bar :: proc() {
                         draw_tab_item_request(t, index)
                     case ^Environment:
                         // TODO:
-                        engine.ui_text(string(cstring(&t.name[0])))
+                        engine.ui_text(t.name)
                     case ^Collection:
                         // TODO:
                         engine.ui_text(t.name)
@@ -3591,12 +3591,13 @@ migrate_collections_schema_1_to_2 :: proc(data: []byte) -> ([]byte, bool) {
         for &request in collection.requests {
             if request.body.type == .Form {
                 for &field in request.body.structured {
-                    value := string(cstring(&field.value[0]))
+                    value := field.value
 
                     if field.is_file && value != "" {
                         // Move the file path from the value to the new file_paths field and set the value to an empty string.
                         append(&field.file_paths, strings.clone(value))
-                        mem.zero_item(&field.value)
+                        delete(field.value)
+                        field.value = ""
                     }
                 }
             }
@@ -3901,25 +3902,64 @@ save_config :: proc() {
     }
 }
 
+// Returns a deep copy of an Authorization with all string fields cloned, so the copy
+// can be freed independently (a plain value copy would alias the strings -> double-free).
+clone_authorization :: proc(src: Authorization) -> Authorization {
+    dst := src
+    dst.basic_username = strings.clone(src.basic_username)
+    dst.basic_password = strings.clone(src.basic_password)
+    dst.bearer_token   = strings.clone(src.bearer_token)
+    dst.bearer_prefix  = strings.clone(src.bearer_prefix)
+    dst.api_key_key    = strings.clone(src.api_key_key)
+    dst.api_key_value  = strings.clone(src.api_key_value)
+    return dst
+}
+
+destroy_authorization :: proc(auth: ^Authorization) {
+    delete(auth.basic_username)
+    delete(auth.basic_password)
+    delete(auth.bearer_token)
+    delete(auth.bearer_prefix)
+    delete(auth.api_key_key)
+    delete(auth.api_key_value)
+}
+
 // Assumes dst is initialized/valid but we want to overwrite its data with src data
 // It clears dst data before copying
 copy_request_data :: proc(dst: ^Request, src: ^Request) {
-    mem.zero_item(&dst.name)
-    copy(dst.name[:], src.name[:])
+    delete(dst.name)
+    dst.name = strings.clone(src.name)
     dst.method = src.method
     strings.builder_reset(&dst.url)
     strings.write_string(&dst.url, strings.to_string(src.url))
 
+    for param in dst.query_params {
+        delete(param.key)
+        delete(param.value)
+    }
     delete(dst.query_params)
     dst.query_params = make([dynamic]QueryParam, len(src.query_params))
-    copy(dst.query_params[:], src.query_params[:])
+    for param, i in src.query_params {
+        dst.query_params[i] = param
+        dst.query_params[i].key = strings.clone(param.key)
+        dst.query_params[i].value = strings.clone(param.value)
+    }
 
+    for header in dst.headers {
+        delete(header.key)
+        delete(header.value)
+    }
     delete(dst.headers)
     dst.headers = make([dynamic]RequestHeader, len(src.headers))
-    copy(dst.headers[:], src.headers[:])
+    for header, i in src.headers {
+        dst.headers[i] = header
+        dst.headers[i].key = strings.clone(header.key)
+        dst.headers[i].value = strings.clone(header.value)
+    }
 
     for key, param in dst.path_params {
         delete(param.indices)
+        delete(param.value)
         delete(key)
     }
     delete(dst.path_params)
@@ -3927,7 +3967,7 @@ copy_request_data :: proc(dst: ^Request, src: ^Request) {
 
     for key, &value in src.path_params {
         new_value := PathParam{}
-        copy(new_value.value[:], value.value[:])
+        new_value.value = strings.clone(value.value)
         new_value.indices = make([dynamic]PathParamIndex, len(value.indices))
         copy(new_value.indices[:], value.indices[:])
         dst.path_params[strings.clone(key)] = new_value
@@ -3935,6 +3975,9 @@ copy_request_data :: proc(dst: ^Request, src: ^Request) {
 
     strings.builder_destroy(&dst.body.text)
     for field in dst.body.structured {
+        delete(field.key)
+        delete(field.value)
+        delete(field.content_type)
         for file_path in field.file_paths {
             delete(file_path)
         }
@@ -3949,8 +3992,11 @@ copy_request_data :: proc(dst: ^Request, src: ^Request) {
     copy(dst.body.text.buf[:], src.body.text.buf[:])
 
     dst.body.structured = make([dynamic]FormField, len(src.body.structured))
-    copy(dst.body.structured[:], src.body.structured[:])
     for field, i in src.body.structured {
+        dst.body.structured[i] = field
+        dst.body.structured[i].key = strings.clone(field.key)
+        dst.body.structured[i].value = strings.clone(field.value)
+        dst.body.structured[i].content_type = strings.clone(field.content_type)
         dst.body.structured[i].file_paths = make([dynamic]string, len(field.file_paths))
         for file_path, j in field.file_paths {
             dst.body.structured[i].file_paths[j] = strings.clone(file_path)
@@ -3959,19 +4005,8 @@ copy_request_data :: proc(dst: ^Request, src: ^Request) {
 
     dst.body.binary_path = strings.clone(src.body.binary_path)
 
-    // Update auth
-    dst.auth.type = src.auth.type
-    mem.zero_item(&dst.auth.basic_username)
-    mem.zero_item(&dst.auth.basic_password)
-    mem.zero_item(&dst.auth.bearer_token)
-    mem.zero_item(&dst.auth.api_key_key)
-    mem.zero_item(&dst.auth.api_key_value)
-    copy(dst.auth.basic_username[:], src.auth.basic_username[:])
-    copy(dst.auth.basic_password[:], src.auth.basic_password[:])
-    copy(dst.auth.bearer_token[:], src.auth.bearer_token[:])
-    copy(dst.auth.api_key_key[:], src.auth.api_key_key[:])
-    copy(dst.auth.api_key_value[:], src.auth.api_key_value[:])
-    dst.auth.api_key_add_to = src.auth.api_key_add_to
+    destroy_authorization(&dst.auth)
+    dst.auth = clone_authorization(src.auth)
 
     dst.collection = src.collection
     dst.modification_hash = src.modification_hash
@@ -3981,9 +4016,15 @@ copy_request_data :: proc(dst: ^Request, src: ^Request) {
 }
 
 destroy_request :: proc(request: ^Request) {
+    delete(request.name)
+    destroy_authorization(&request.auth)
+
     strings.builder_destroy(&request.url)
     strings.builder_destroy(&request.body.text)
     for &field in request.body.structured {
+        delete(field.key)
+        delete(field.value)
+        delete(field.content_type)
         for file_path in field.file_paths {
             delete(file_path)
         }
@@ -3992,7 +4033,15 @@ destroy_request :: proc(request: ^Request) {
     delete(request.body.structured)
     delete(request.body.binary_path)
 
+    for param in request.query_params {
+        delete(param.key)
+        delete(param.value)
+    }
     delete(request.query_params)
+    for header in request.headers {
+        delete(header.key)
+        delete(header.value)
+    }
     delete(request.headers)
     for header in request.response.headers {
         delete(header.key)
@@ -4001,6 +4050,7 @@ destroy_request :: proc(request: ^Request) {
     delete(request.response.headers)
     for key, param in request.path_params {
         delete(param.indices)
+        delete(param.value)
         delete(key)
     }
     delete(request.path_params)
@@ -4032,6 +4082,7 @@ destroy_collection :: proc(collection: ^Collection) {
         destroy_collection(child)
     }
 
+    destroy_authorization(&collection.auth)
     delete(collection.name)
     free(collection)
 }
@@ -4092,7 +4143,7 @@ update_url_from_query_params :: proc(request: ^Request) {
     }
     should_write_ampersand := false
     for &param in request.query_params {
-        key := string(cstring(&param.key[0]))
+        key := param.key
         if param.disabled || key == "" {
             continue
         }
@@ -4103,7 +4154,7 @@ update_url_from_query_params :: proc(request: ^Request) {
         should_write_ampersand = true
 
         strings.write_string(&merged_url, key)
-        val := string(cstring(&param.value[0]))
+        val := param.value
         if val != "" {
             strings.write_byte(&merged_url, '=')
             strings.write_string(&merged_url, val)
@@ -4158,7 +4209,7 @@ parse_path_params_from_url :: proc(request: ^Request) {
                     append(&p.indices, index)
 
                     if old, ok := old_path_params[key]; ok {
-                        copy(p.value[:], string(cstring(&old.value[0])))
+                        p.value = strings.clone(old.value)
                     }
 
                     new_path_params[strings.clone(key)] = p
@@ -4212,10 +4263,8 @@ request_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) -> 
             case i64:
                 id := ((cast(^i64)(data))^)
                 io.write_i64(w, id) or_return
-            case [128]u8:
-                cstr := ((cast(^[128]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
+            case string:
+                str := (cast(^string)(data))^
                 io.write_quoted_string(w, str) or_return
             case HttpMethod:
                 method := ((cast(^HttpMethod)(data))^)
@@ -4294,27 +4343,27 @@ request_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) -> 
                 io.write_byte(w, ',') or_return
 
                 io.write_string(w, `"basic_username":`) or_return
-                io.write_quoted_string(w, string(cstring(&auth.basic_username[0]))) or_return
+                io.write_quoted_string(w, auth.basic_username) or_return
                 io.write_byte(w, ',') or_return
 
                 io.write_string(w, `"basic_password":`) or_return
-                io.write_quoted_string(w, string(cstring(&auth.basic_password[0]))) or_return
+                io.write_quoted_string(w, auth.basic_password) or_return
                 io.write_byte(w, ',') or_return
 
                 io.write_string(w, `"bearer_token":`) or_return
-                io.write_quoted_string(w, string(cstring(&auth.bearer_token[0]))) or_return
+                io.write_quoted_string(w, auth.bearer_token) or_return
                 io.write_byte(w, ',') or_return
 
                 io.write_string(w, `"bearer_prefix":`) or_return
-                io.write_quoted_string(w, string(cstring(&auth.bearer_prefix[0]))) or_return
+                io.write_quoted_string(w, auth.bearer_prefix) or_return
                 io.write_byte(w, ',') or_return
 
                 io.write_string(w, `"api_key_key":`) or_return
-                io.write_quoted_string(w, string(cstring(&auth.api_key_key[0]))) or_return
+                io.write_quoted_string(w, auth.api_key_key) or_return
                 io.write_byte(w, ',') or_return
 
                 io.write_string(w, `"api_key_value":`) or_return
-                io.write_quoted_string(w, string(cstring(&auth.api_key_value[0]))) or_return
+                io.write_quoted_string(w, auth.api_key_value) or_return
                 io.write_byte(w, ',') or_return
 
                 io.write_string(w, `"api_key_add_to":`) or_return
@@ -4455,27 +4504,27 @@ collection_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) 
                     io.write_byte(w, ',') or_return
 
                     io.write_string(w, `"basic_username":`) or_return
-                    io.write_quoted_string(w, string(cstring(&auth.basic_username[0]))) or_return
+                    io.write_quoted_string(w, auth.basic_username) or_return
                     io.write_byte(w, ',') or_return
 
                     io.write_string(w, `"basic_password":`) or_return
-                    io.write_quoted_string(w, string(cstring(&auth.basic_password[0]))) or_return
+                    io.write_quoted_string(w, auth.basic_password) or_return
                     io.write_byte(w, ',') or_return
 
                     io.write_string(w, `"bearer_token":`) or_return
-                    io.write_quoted_string(w, string(cstring(&auth.bearer_token[0]))) or_return
+                    io.write_quoted_string(w, auth.bearer_token) or_return
                     io.write_byte(w, ',') or_return
 
                     io.write_string(w, `"bearer_prefix":`) or_return
-                    io.write_quoted_string(w, string(cstring(&auth.bearer_prefix[0]))) or_return
+                    io.write_quoted_string(w, auth.bearer_prefix) or_return
                     io.write_byte(w, ',') or_return
 
                     io.write_string(w, `"api_key_key":`) or_return
-                    io.write_quoted_string(w, string(cstring(&auth.api_key_key[0]))) or_return
+                    io.write_quoted_string(w, auth.api_key_key) or_return
                     io.write_byte(w, ',') or_return
 
                     io.write_string(w, `"api_key_value":`) or_return
-                    io.write_quoted_string(w, string(cstring(&auth.api_key_value[0]))) or_return
+                    io.write_quoted_string(w, auth.api_key_value) or_return
                     io.write_byte(w, ',') or_return
 
                     io.write_string(w, `"api_key_add_to":`) or_return
@@ -4542,10 +4591,8 @@ environment_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options)
             case i64:
                 id := ((cast(^i64)(data))^)
                 io.write_i64(w, id) or_return
-            case [64]u8:
-                cstr := ((cast(^[64]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
+            case string:
+                str := (cast(^string)(data))^
                 io.write_quoted_string(w, str) or_return
             case map[string]string:
                 vars := ((cast(^map[string]string)(data))^)
@@ -4596,15 +4643,8 @@ environment_variable_field_marshaller :: proc(w: io.Writer, v: any, opt: ^json.M
             data := rawptr(uintptr(v.data) + info.offsets[i])
 
             switch type.id {
-            case [128]u8:
-                cstr := ((cast(^[128]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
-                io.write_quoted_string(w, str) or_return
-            case [1024]u8:
-                cstr := ((cast(^[1024]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
+            case string:
+                str := (cast(^string)(data))^
                 io.write_quoted_string(w, str) or_return
             case bool:
                 b := ((cast(^bool)(data))^)
@@ -4654,20 +4694,8 @@ form_field_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) 
             case bool:
                 disabled := ((cast(^bool)(data))^)
                 io.write_string(w, "true" if disabled else "false") or_return
-            case [128]u8:
-                cstr := ((cast(^[128]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
-                io.write_quoted_string(w, str) or_return
-            case [512]u8:
-                cstr := ((cast(^[512]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
-                io.write_quoted_string(w, str) or_return
-            case [1024]u8:
-                cstr := ((cast(^[1024]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
+            case string:
+                str := (cast(^string)(data))^
                 io.write_quoted_string(w, str) or_return
             case [dynamic]string:
                 arr := ((cast(^[dynamic]string)(data))^)
@@ -4719,20 +4747,8 @@ key_value_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) -
             case bool:
                 disabled := ((cast(^bool)(data))^)
                 io.write_string(w, "true" if disabled else "false")
-            case [128]u8:
-                cstr := ((cast(^[128]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
-                io.write_quoted_string(w, str) or_return
-            case [512]u8:
-                cstr := ((cast(^[512]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
-                io.write_quoted_string(w, str) or_return
-            case [1024]u8:
-                cstr := ((cast(^[1024]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
+            case string:
+                str := (cast(^string)(data))^
                 io.write_quoted_string(w, str) or_return
             }
         }
@@ -4778,10 +4794,8 @@ path_param_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) 
                 opt: json.Marshal_Options
 
                 json.marshal_to_writer(w, arr, &opt) or_return
-            case [1024]u8:
-                cstr := ((cast(^[1024]u8)(data))^)
-                str := strings.clone_from_cstring(cstring(&cstr[0]))
-                defer delete(str)
+            case string:
+                str := (cast(^string)(data))^
                 io.write_quoted_string(w, str) or_return
             }
         }
@@ -4839,16 +4853,16 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
         }
         collection.auth.type = cast(AuthType)auth_type
         collection.auth.api_key_add_to = cast(ApiKeyAddTo)auth_api_key_add_to
-        copy(collection.auth.basic_username[:], auth_basic_username)
-        copy(collection.auth.basic_password[:], auth_basic_password)
-        copy(collection.auth.bearer_token[:], auth_bearer_token)
-        copy(collection.auth.api_key_key[:], auth_api_key_key)
-        copy(collection.auth.api_key_value[:], auth_api_key_value)
+        collection.auth.basic_username = strings.clone(auth_basic_username)
+        collection.auth.basic_password = strings.clone(auth_basic_password)
+        collection.auth.bearer_token = strings.clone(auth_bearer_token)
+        collection.auth.api_key_key = strings.clone(auth_api_key_key)
+        collection.auth.api_key_value = strings.clone(auth_api_key_value)
 
         // Backwards compatible: older saves may not have bearer_prefix
         #partial switch bp in auth["bearer_prefix"] {
         case json.String:
-            copy(collection.auth.bearer_prefix[:], bp)
+            collection.auth.bearer_prefix = strings.clone(bp)
         }
     }
 
@@ -4869,7 +4883,7 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
         body := request_map["body"]
 
         request.id = id
-        copy(request.name[:], name[:])
+        request.name = strings.clone(name[:])
         // Using pascal case is a quick hack to get a capitalized method
         method, a_err = strings.to_pascal_case(method)
         defer delete(method)
@@ -4925,10 +4939,10 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
                     if disabled_ok {
                         f.disabled = field_disabled.(json.Boolean)
                     }
-                    copy(f.key[:], field_key)
-                    copy(f.value[:], field_value)
+                    f.key = strings.clone(field_key)
+                    f.value = strings.clone(field_value)
                     if ct_ok {
-                        copy(f.content_type[:], field_content_type.(json.String))
+                        f.content_type = strings.clone(field_content_type.(json.String))
                     }
 
                     if file_paths_ok {
@@ -4960,8 +4974,8 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
                 if disabled_ok {
                     h.disabled = header_disabled.(json.Boolean)
                 }
-                copy(h.key[:], header_name[:])
-                copy(h.value[:], header_value[:])
+                h.key = strings.clone(header_name[:])
+                h.value = strings.clone(header_value[:])
                 append(&request.headers, h)
             }
         }
@@ -4986,16 +5000,16 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
             }
             request.auth.type = cast(AuthType)auth_type
             request.auth.api_key_add_to = cast(ApiKeyAddTo)auth_api_key_add_to
-            copy(request.auth.basic_username[:], auth_basic_username)
-            copy(request.auth.basic_password[:], auth_basic_password)
-            copy(request.auth.bearer_token[:], auth_bearer_token)
-            copy(request.auth.api_key_key[:], auth_api_key_key)
-            copy(request.auth.api_key_value[:], auth_api_key_value)
+            request.auth.basic_username = strings.clone(auth_basic_username)
+            request.auth.basic_password = strings.clone(auth_basic_password)
+            request.auth.bearer_token = strings.clone(auth_bearer_token)
+            request.auth.api_key_key = strings.clone(auth_api_key_key)
+            request.auth.api_key_value = strings.clone(auth_api_key_value)
 
             // Backwards compatible: older saves may not have bearer_prefix
             #partial switch bp in auth["bearer_prefix"] {
             case json.String:
-                copy(request.auth.bearer_prefix[:], bp)
+                request.auth.bearer_prefix = strings.clone(bp)
             }
         }
 
@@ -5013,8 +5027,8 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
                 p := QueryParam{}
                 p.id = param_id
                 p.disabled = param_disabled
-                copy(p.key[:], param_name)
-                copy(p.value[:], param_value)
+                p.key = strings.clone(param_name)
+                p.value = strings.clone(param_value)
                 append(&request.query_params, p)
             }
         }
@@ -5027,7 +5041,7 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
                 indices := param["indices"].(json.Array)
 
                 p := PathParam{}
-                copy(p.value[:], param_value)
+                p.value = strings.clone(param_value)
                 for index in indices {
                     index := index.(json.Object)
                     start := index["start"].(json.Integer)
@@ -5114,7 +5128,7 @@ workspace_unmarshaller :: proc(p: ^json.Parser, v: any) -> json.Unmarshal_Error 
 
                 environment := new(Environment)
                 environment.id = id
-                copy(environment.name[:], name)
+                environment.name = strings.clone(name)
 
                 for f in variables {
                     field := f.(json.Object)
@@ -5122,8 +5136,8 @@ workspace_unmarshaller :: proc(p: ^json.Parser, v: any) -> json.Unmarshal_Error 
                     var_value := field["value"].(json.String)
 
                     var_field := EnvironmentVariableField{}
-                    copy(var_field.variable[:], var_key)
-                    copy(var_field.value[:], var_value)
+                    var_field.variable = strings.clone(var_key)
+                    var_field.value = strings.clone(var_value)
 
                     var_enabled, has_enabled := field["enabled"]
                     if has_enabled {
@@ -5189,31 +5203,16 @@ resolve_request_auth :: proc(request: ^Request) -> Authorization {
     return resolve_collection_auth(request.collection)
 }
 
+// Returns an Authorization whose string fields are trimmed. The result aliases the input
+// (trim_space returns sub-slices, no allocation), so it is read-only and must not be freed.
 trimmed_auth :: proc(auth: Authorization) -> Authorization {
-    auth_local := auth
     trimmed := auth
-
-    username := strings.trim_space(string(cstring(&auth_local.basic_username[0])))
-    password := strings.trim_space(string(cstring(&auth_local.basic_password[0])))
-    bearer_token := strings.trim_space(string(cstring(&auth_local.bearer_token[0])))
-    bearer_prefix := strings.trim_space(string(cstring(&auth_local.bearer_prefix[0])))
-    api_key_key := strings.trim_space(string(cstring(&auth_local.api_key_key[0])))
-    api_key_value := strings.trim_space(string(cstring(&auth_local.api_key_value[0])))
-
-    mem.zero_item(&trimmed.basic_username)
-    mem.zero_item(&trimmed.basic_password)
-    mem.zero_item(&trimmed.bearer_token)
-    mem.zero_item(&trimmed.bearer_prefix)
-    mem.zero_item(&trimmed.api_key_key)
-    mem.zero_item(&trimmed.api_key_value)
-
-    copy(trimmed.basic_username[:], username)
-    copy(trimmed.basic_password[:], password)
-    copy(trimmed.bearer_token[:], bearer_token)
-    copy(trimmed.bearer_prefix[:], bearer_prefix)
-    copy(trimmed.api_key_key[:], api_key_key)
-    copy(trimmed.api_key_value[:], api_key_value)
-
+    trimmed.basic_username = strings.trim_space(auth.basic_username)
+    trimmed.basic_password = strings.trim_space(auth.basic_password)
+    trimmed.bearer_token   = strings.trim_space(auth.bearer_token)
+    trimmed.bearer_prefix  = strings.trim_space(auth.bearer_prefix)
+    trimmed.api_key_key    = strings.trim_space(auth.api_key_key)
+    trimmed.api_key_value  = strings.trim_space(auth.api_key_value)
     return trimmed
 }
 
@@ -5230,59 +5229,21 @@ resolve_effective_auth :: proc(tab: TabItem) -> Authorization {
     return Authorization{}
 }
 
+// Substitutes {{env vars}} in each auth field. Resolved fields are allocated on the temp
+// allocator (freed at frame end); unchanged fields alias the input. The result is read-only
+// and must not be freed.
 resolve_auth_environment_variables :: proc(auth: Authorization) -> (resolved: Authorization) {
+    resolve_one :: proc(s: string) -> string {
+        out, changed := resolve_environment_variables(s, context.temp_allocator)
+        return out if changed else s
+    }
+
     resolved = auth
-
-    basic_username_bytes := auth.basic_username
-    basic_username, changed_basic_username := resolve_environment_variables(string(cstring(&basic_username_bytes[0])))
-    defer if changed_basic_username {
-        delete(basic_username)
-    }
-    if changed_basic_username {
-        mem.zero_item(&resolved.basic_username)
-        copy(resolved.basic_username[:], basic_username)
-    }
-
-    basic_password_bytes := auth.basic_password
-    basic_password, changed_basic_password := resolve_environment_variables(string(cstring(&basic_password_bytes[0])))
-    defer if changed_basic_password {
-        delete(basic_password)
-    }
-    if changed_basic_password {
-        mem.zero_item(&resolved.basic_password)
-        copy(resolved.basic_password[:], basic_password)
-    }
-
-    bearer_token_bytes := auth.bearer_token
-    bearer_token, changed_bearer_token := resolve_environment_variables(string(cstring(&bearer_token_bytes[0])))
-    defer if changed_bearer_token {
-        delete(bearer_token)
-    }
-    if changed_bearer_token {
-        mem.zero_item(&resolved.bearer_token)
-        copy(resolved.bearer_token[:], bearer_token)
-    }
-
-    api_key_key_bytes := auth.api_key_key
-    api_key_key, changed_api_key_key := resolve_environment_variables(string(cstring(&api_key_key_bytes[0])))
-    defer if changed_api_key_key {
-        delete(api_key_key)
-    }
-    if changed_api_key_key {
-        mem.zero_item(&resolved.api_key_key)
-        copy(resolved.api_key_key[:], api_key_key)
-    }
-
-    api_key_value_bytes := auth.api_key_value
-    api_key_value, changed_api_key_value := resolve_environment_variables(string(cstring(&api_key_value_bytes[0])))
-    defer if changed_api_key_value {
-        delete(api_key_value)
-    }
-    if changed_api_key_value {
-        mem.zero_item(&resolved.api_key_value)
-        copy(resolved.api_key_value[:], api_key_value)
-    }
-
+    resolved.basic_username = resolve_one(auth.basic_username)
+    resolved.basic_password = resolve_one(auth.basic_password)
+    resolved.bearer_token   = resolve_one(auth.bearer_token)
+    resolved.api_key_key    = resolve_one(auth.api_key_key)
+    resolved.api_key_value  = resolve_one(auth.api_key_value)
     return resolved
 }
 
@@ -5305,14 +5266,14 @@ current_workspace_selected_environment_index :: proc() -> i32 {
     return -1
 }
 
-current_workspace_selected_environment_name :: proc() -> cstring {
+current_workspace_selected_environment_name :: proc() -> string {
     index := current_workspace_selected_environment_index()
     if index < 0 {
         return "No Environment"
     }
 
     workspace := &state.workspaces[state.active_workspace_index]
-    return cstring(&workspace.environments[index].name[0])
+    return workspace.environments[index].name
 }
 
 current_workspace_selected_environment :: proc() -> ^Environment {
@@ -5342,9 +5303,9 @@ lookup_environment_variable_value :: proc(key: string) -> (string, bool) {
             continue
         }
 
-        variable_key := strings.trim_space(string(cstring(&field.variable[0])))
+        variable_key := strings.trim_space(field.variable)
         if variable_key == trimmed_key {
-            value := string(cstring(&field.value[0]))
+            value := field.value
             if strings.trim_space(value) == "" {
                 continue
             }
@@ -5401,13 +5362,13 @@ build_final_request_url :: proc(request: ^Request, effective_auth: Authorization
     }
 
     for key, &param in request.path_params {
-        if cstring(&param.value[0]) == "" {
+        if param.value == "" {
             continue
         }
 
         placeholder := fmt.aprintf(":%s", key)
         defer delete(placeholder)
-        path_param_value := string(cstring(&param.value[0]))
+        path_param_value := param.value
         resolved_path_param_value, path_param_changed := resolve_environment_variables(path_param_value, allocator)
         defer if path_param_changed {
             delete(resolved_path_param_value)
@@ -5422,15 +5383,14 @@ build_final_request_url :: proc(request: ^Request, effective_auth: Authorization
     }
 
     effective_api_key_key_bytes := effective_auth.api_key_key
-    effective_api_key_key := strings.trim_space(string(cstring(&effective_api_key_key_bytes[0])))
+    effective_api_key_key := strings.trim_space(effective_api_key_key_bytes)
     should_write_ampersand := false
     if len(request.query_params) > 0 || (effective_auth.type == .ApiKey && effective_auth.api_key_add_to == .QueryParam && effective_api_key_key != "") {
         strings.write_byte(&final_url, '?')
     }
 
     if effective_auth.type == .ApiKey && effective_auth.api_key_add_to == .QueryParam {
-        api_value_bytes := effective_auth.api_key_value
-        api_value := string(cstring(&api_value_bytes[0]))
+        api_value := effective_auth.api_key_value
         if effective_api_key_key != "" {
             should_write_ampersand = true
 
@@ -5453,8 +5413,8 @@ build_final_request_url :: proc(request: ^Request, effective_auth: Authorization
     }
 
     for &query in request.query_params {
-        key := string(cstring(&query.key[0]))
-        value := string(cstring(&query.value[0]))
+        key := query.key
+        value := query.value
 
         resolved_key, key_changed := resolve_environment_variables(key, allocator)
         defer if key_changed {
@@ -5618,7 +5578,7 @@ send_request :: proc(request: ^Request) {
     }
 
     effective_auth := resolve_auth_environment_variables(trimmed_auth(resolve_request_auth(request)))
-    effective_api_key_key := string(cstring(&effective_auth.api_key_key[0]))
+    effective_api_key_key := effective_auth.api_key_key
     effective_api_key_key_lower := strings.to_lower(effective_api_key_key)
     defer delete(effective_api_key_key_lower)
 
@@ -5627,15 +5587,8 @@ send_request :: proc(request: ^Request) {
             continue
         }
 
-        // Use the cstring's length to terminate at the first null byte
-        // otherwise the join ends up with multiple null bytes between the key and value
-        // and that causes the eventual cstring conversion to terminate at the first null byte
-        // which is after the key.
-
-        key_cstr := cstring(&header.key[0])
-        value_cstr := cstring(&header.value[0])
-        key := string(header.key[:len(key_cstr)])
-        value := string(header.value[:len(value_cstr)])
+        key := header.key
+        value := header.value
 
         resolved_key, key_changed := resolve_environment_variables(key)
         defer if key_changed {
@@ -5689,8 +5642,8 @@ send_request :: proc(request: ^Request) {
     case .NoAuth:
         // no-op
     case .Basic:
-        username := string(cstring(&effective_auth.basic_username[0]))
-        password := string(cstring(&effective_auth.basic_password[0]))
+        username := effective_auth.basic_username
+        password := effective_auth.basic_password
         if username != "" || password != "" {
             credentials := fmt.aprintf("%s:%s", username, password)
             defer delete(credentials)
@@ -5703,9 +5656,9 @@ send_request :: proc(request: ^Request) {
             request.curl_headers = curl.slist_append(request.curl_headers, auth_cstr)
         }
     case .Token:
-        token := string(cstring(&effective_auth.bearer_token[0]))
+        token := effective_auth.bearer_token
         if token != "" {
-            prefix := string(cstring(&effective_auth.bearer_prefix[0]))
+            prefix := effective_auth.bearer_prefix
             if prefix == "" {
                 prefix = "Bearer"
             }
@@ -5717,7 +5670,7 @@ send_request :: proc(request: ^Request) {
         }
     case .ApiKey:
         key := effective_api_key_key
-        value := string(cstring(&effective_auth.api_key_value[0]))
+        value := effective_auth.api_key_value
         if key != "" && effective_auth.api_key_add_to == .Header {
             api_header := fmt.aprintf("%s: %s", key, value)
             defer delete(api_header)
@@ -5816,7 +5769,7 @@ send_request :: proc(request: ^Request) {
                     field_key = resolved_field_key
                 }
 
-                field_content_type := string(cstring(&field.content_type[0]))
+                field_content_type := field.content_type
                 resolved_field_content_type, field_content_type_changed := resolve_environment_variables(field_content_type)
                 defer if field_content_type_changed {
                     delete(resolved_field_content_type)
@@ -5875,7 +5828,7 @@ send_request :: proc(request: ^Request) {
                     field_value = resolved_field_value
                 }
 
-                field_content_type := string(cstring(&field.content_type[0]))
+                field_content_type := field.content_type
                 resolved_field_content_type, field_content_type_changed := resolve_environment_variables(field_content_type)
                 defer if field_content_type_changed {
                     delete(resolved_field_content_type)
@@ -6049,14 +6002,7 @@ new_request_tab :: proc() {
     req := new(Request)
     req.id = rand.int63()
     req.active_options_tab = .Parameters
-    req.name[0] = 'U'
-    req.name[1] = 'n'
-    req.name[2] = 't'
-    req.name[3] = 'i'
-    req.name[4] = 't'
-    req.name[5] = 'l'
-    req.name[6] = 'e'
-    req.name[7] = 'd'
+    req.name = strings.clone("Untitled")
     req.headers = make([dynamic]RequestHeader)
 
     // Only init the text builder because the dyn arrays are inited on the first append
@@ -6065,16 +6011,16 @@ new_request_tab :: proc() {
     // NOTE: some sites return a 403 if we don't send a user-agent. Should probably also look into
     // adding some other default headers (check postman and hoppscotch)
     user_agent := RequestHeader{id = rand.int63()}
-    copy(user_agent.key[:], "User-Agent")
+    user_agent.key = strings.clone("User-Agent")
     when RELEASE_BUILD {
-        copy(user_agent.value[:], "moonladder" + "/" + VERSION)
+        user_agent.value = strings.clone("moonladder" + "/" + VERSION)
     } else {
-        copy(user_agent.value[:], "moonladder" + "/" + "debug")
+        user_agent.value = strings.clone("moonladder" + "/" + "debug")
     }
 
     accept := RequestHeader{id = rand.int63()}
-    copy(accept.key[:], "Accept")
-    copy(accept.value[:], "*/*")
+    accept.key = strings.clone("Accept")
+    accept.value = strings.clone("*/*")
 
     append(&req.headers, user_agent)
     append(&req.headers, accept)
@@ -6171,7 +6117,7 @@ clone_collection :: proc(src: ^Collection, parent: ^Collection) -> ^Collection {
     dst := new(Collection)
     dst.id = rand.int63()
     dst.name = strings.clone(src.name)
-    dst.auth = src.auth
+    dst.auth = clone_authorization(src.auth)
     dst.parent = parent
     dst.is_expanded = src.is_expanded
     dst.requests = make([dynamic]Request)
@@ -6281,15 +6227,15 @@ rename_collection_request :: proc(collection: ^Collection, request_id: i64, new_
         return
     }
 
-    mem.zero_item(&req.name)
-    copy(req.name[:127], name)
+    delete(req.name)
+    req.name = strings.clone(name)
 
     // Keep any open tab for this request in sync.
     for tab in state.tabs {
         r, is_request := tab.(^Request)
         if is_request && r.id == request_id {
-            mem.zero_item(&r.name)
-            copy(r.name[:127], name)
+            delete(r.name)
+            r.name = strings.clone(name)
         }
     }
 
@@ -6374,7 +6320,7 @@ create_environment :: proc(name: string) {
 
     environment := new(Environment)
     environment.id = rand.int63()
-    copy(environment.name[:63], trimmed)
+    environment.name = strings.clone(trimmed)
 
     append(&state.workspaces[state.active_workspace_index].environments, environment)
 
@@ -6393,14 +6339,19 @@ rename_environment :: proc(idx: int, new_name: string) {
     }
 
     env := environments[idx]
-    mem.zero_item(&env.name)
-    copy(env.name[:63], name)
+    delete(env.name)
+    env.name = strings.clone(name)
 
     save_workspaces()
 }
 
 // Frees everything an environment owns. The slot/pointer is the caller's concern.
 destroy_environment :: proc(environment: ^Environment) {
+    delete(environment.name)
+    for field in environment.variables {
+        delete(field.variable)
+        delete(field.value)
+    }
     delete(environment.variables)
 }
 
@@ -6706,7 +6657,7 @@ export_environment_via_dialog :: proc(idx: int) {
         return
     }
     env := environments[idx]
-    name := string(cstring(&env.name[0]))
+    name := env.name
     default_name := fmt.tprintf("%s.postman_environment.json", sanitize_export_file_name(name, "environment", context.temp_allocator))
     path, ok := engine.file_dialog_save("Export Environment", default_name, JSON_FILE_FILTERS, context.temp_allocator)
     if !ok {
@@ -6716,24 +6667,24 @@ export_environment_via_dialog :: proc(idx: int) {
 }
 
 hash_request :: proc(request: ^Request) -> u128 {
-    xxhash.XXH3_128_update(state.hasher, request.name[:len(cstring(&request.name[0]))])
+    xxhash.XXH3_128_update(state.hasher, transmute([]u8)request.name)
     xxhash.XXH3_128_update(state.hasher, {cast(u8)request.method})
     xxhash.XXH3_128_update(state.hasher, transmute([]u8)strings.to_string(request.url)[:])
     for &param in request.query_params {
-        xxhash.XXH3_128_update(state.hasher, param.key[:len(cstring(&param.key[0]))])
+        xxhash.XXH3_128_update(state.hasher, transmute([]u8)param.key)
         xxhash.XXH3_128_update(state.hasher, {cast(u8)param.disabled})
-        xxhash.XXH3_128_update(state.hasher, param.value[:len(cstring(&param.value[0]))])
+        xxhash.XXH3_128_update(state.hasher, transmute([]u8)param.value)
     }
 
     for &header in request.headers {
-        xxhash.XXH3_128_update(state.hasher, header.key[:len(cstring(&header.key[0]))])
+        xxhash.XXH3_128_update(state.hasher, transmute([]u8)header.key)
         xxhash.XXH3_128_update(state.hasher, {cast(u8)header.disabled})
-        xxhash.XXH3_128_update(state.hasher, header.value[:len(cstring(&header.value[0]))])
+        xxhash.XXH3_128_update(state.hasher, transmute([]u8)header.value)
     }
 
     for key, &value in request.path_params {
         xxhash.XXH3_128_update(state.hasher, transmute([]u8)key)
-        xxhash.XXH3_128_update(state.hasher, value.value[:len(cstring(&value.value[0]))])
+        xxhash.XXH3_128_update(state.hasher, transmute([]u8)value.value)
 
         for index in value.indices {
             start := (transmute([8]u8)index.start)
@@ -6744,12 +6695,12 @@ hash_request :: proc(request: ^Request) -> u128 {
     }
 
     xxhash.XXH3_128_update(state.hasher, {cast(u8)request.auth.type})
-    xxhash.XXH3_128_update(state.hasher, request.auth.basic_username[:len(cstring(&request.auth.basic_username[0]))])
-    xxhash.XXH3_128_update(state.hasher, request.auth.basic_password[:len(cstring(&request.auth.basic_password[0]))])
-    xxhash.XXH3_128_update(state.hasher, request.auth.bearer_token[:len(cstring(&request.auth.bearer_token[0]))])
-    xxhash.XXH3_128_update(state.hasher, request.auth.bearer_prefix[:len(cstring(&request.auth.bearer_prefix[0]))])
-    xxhash.XXH3_128_update(state.hasher, request.auth.api_key_key[:len(cstring(&request.auth.api_key_key[0]))])
-    xxhash.XXH3_128_update(state.hasher, request.auth.api_key_value[:len(cstring(&request.auth.api_key_value[0]))])
+    xxhash.XXH3_128_update(state.hasher, transmute([]u8)request.auth.basic_username)
+    xxhash.XXH3_128_update(state.hasher, transmute([]u8)request.auth.basic_password)
+    xxhash.XXH3_128_update(state.hasher, transmute([]u8)request.auth.bearer_token)
+    xxhash.XXH3_128_update(state.hasher, transmute([]u8)request.auth.bearer_prefix)
+    xxhash.XXH3_128_update(state.hasher, transmute([]u8)request.auth.api_key_key)
+    xxhash.XXH3_128_update(state.hasher, transmute([]u8)request.auth.api_key_value)
     xxhash.XXH3_128_update(state.hasher, {cast(u8)request.auth.api_key_add_to})
 
     xxhash.XXH3_128_update(state.hasher, {cast(u8)request.body.type})
@@ -6758,14 +6709,14 @@ hash_request :: proc(request: ^Request) -> u128 {
         xxhash.XXH3_128_update(state.hasher, request.body.text.buf[:])
     }
     for &field in request.body.structured {
-        xxhash.XXH3_128_update(state.hasher, field.key[:])
+        xxhash.XXH3_128_update(state.hasher, transmute([]u8)field.key)
         xxhash.XXH3_128_update(state.hasher, {cast(u8)field.disabled})
         xxhash.XXH3_128_update(state.hasher, {cast(u8)field.is_file})
-        xxhash.XXH3_128_update(state.hasher, field.value[:])
+        xxhash.XXH3_128_update(state.hasher, transmute([]u8)field.value)
         for file_path in field.file_paths {
             xxhash.XXH3_128_update(state.hasher, transmute([]u8)file_path)
         }
-        xxhash.XXH3_128_update(state.hasher, field.content_type[:])
+        xxhash.XXH3_128_update(state.hasher, transmute([]u8)field.content_type)
     }
     xxhash.XXH3_128_update(state.hasher, transmute([]u8)request.body.binary_path)
 

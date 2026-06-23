@@ -343,9 +343,9 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 
 			for field in auth.basic {
 				if field.key == "username" {
-					copy(parsed.basic_username[:], field.value)
+					parsed.basic_username = strings.clone(field.value)
 				} else if field.key == "password" {
-					copy(parsed.basic_password[:], field.value)
+					parsed.basic_password = strings.clone(field.value)
 				}
 			}
 		case "bearer":
@@ -357,7 +357,7 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 
 			for field in auth.bearer {
 				if field.key == "token" {
-					copy(parsed.bearer_token[:], field.value)
+					parsed.bearer_token = strings.clone(field.value)
 					break
 				}
 			}
@@ -366,9 +366,9 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 
 			for field in auth.apikey {
 				if field.key == "key" {
-					copy(parsed.api_key_key[:], field.value)
+					parsed.api_key_key = strings.clone(field.value)
 				} else if field.key == "value" {
-					copy(parsed.api_key_value[:], field.value)
+					parsed.api_key_value = strings.clone(field.value)
 				} else if field.key == "in" {
 					if field.value == "header" {
 						parsed.api_key_add_to = .Header
@@ -386,7 +386,7 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 
 	import_request :: proc(item: PostmanCollectionItem, scratch_allocator: mem.Allocator) -> Request {
 		request := Request{id = rand.int63()}
-		copy(request.name[:], item.name)
+		request.name = strings.clone(item.name)
 		switch req in item.request {
 		case string:
 			strings.write_string(&request.url, req)
@@ -403,10 +403,10 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 					p := QueryParam{id = rand.int63()}
 					p.disabled = param.disabled
 					if key, ok := param.key.(string); ok {
-						copy(p.key[:], key)
+						p.key = strings.clone(key)
 					}
 					if value, ok := param.value.(string); ok {
-						copy(p.value[:], value)
+						p.value = strings.clone(value)
 					}
 
 					append(&request.query_params, p)
@@ -436,8 +436,8 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 
 			for header in req.headers {
 				h := RequestHeader{id = rand.int63()}
-				copy(h.key[:], header.key)
-				copy(h.value[:], header.value)
+				h.key = strings.clone(header.key)
+				h.value = strings.clone(header.value)
 				h.disabled = header.disabled
 				append(&request.headers, h)
 			}
@@ -466,8 +466,8 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 					request.body.structured = make([dynamic]FormField)
 					for field in body.urlencoded {
 						f := FormField{id = rand.int63()}
-						copy(f.key[:], field.key)
-						copy(f.value[:], field.value)
+						f.key = strings.clone(field.key)
+						f.value = strings.clone(field.value)
 						f.disabled = field.disabled
 						append(&request.body.structured, f)
 					}
@@ -476,9 +476,9 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 					request.body.structured = make([dynamic]FormField)
 					for field in body.formdata {
 						f := FormField{id = rand.int63()}
-						copy(f.key[:], field.key)
+						f.key = strings.clone(field.key)
 						if field.content_type != "" {
-							copy(f.content_type[:], field.content_type)
+							f.content_type = strings.clone(field.content_type)
 						}
 						f.disabled = field.disabled
 
@@ -489,13 +489,13 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 								if strings.starts_with(src, "postman-cloud:///") {
 									log.warnf("Can't import postman-cloud file for request \"%s\" for form field with key \"%s\"", item.name, field.key)
 								} else {
-									copy(f.value[:], src)
+									f.value = strings.clone(src)
 								}
 							case []struct{}:
 								log.warnf("Unsupported array value for body file type for request \"%s\" for form field with key \"%s\". Setting value to none", item.name, field.key)
 							}
 						} else {
-							copy(f.value[:], field.value)
+							f.value = strings.clone(field.value)
 						}
 
 						append(&request.body.structured, f)
@@ -559,7 +559,7 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 						for variable in variables {
 							variable_key := variable.key if variable.key != "" else variable.id
 							if variable_key == key {
-								copy(p.value[:], variable.value)
+								p.value = strings.clone(variable.value)
 								break
 							}
 						}
@@ -706,13 +706,13 @@ import_insomnia_v4_collection :: proc(data: []byte, scratch_allocator: mem.Alloc
 		}
 
 		req := Request{id = rand.int63()}
-		copy(req.name[:], request.name)
+		req.name = strings.clone(request.name)
 		strings.write_string(&req.url, request.url)
 
 		for param in request.parameters {
 			p := QueryParam{id = rand.int63()}
-			copy(p.key[:], param.name)
-			copy(p.value[:], param.value)
+			p.key = strings.clone(param.name)
+			p.value = strings.clone(param.value)
 
 			append(&req.query_params, p)
 		}
@@ -733,8 +733,8 @@ import_insomnia_v4_collection :: proc(data: []byte, scratch_allocator: mem.Alloc
 
 		for header in request.headers {
 			h := RequestHeader{id = rand.int63()}
-			copy(h.key[:], header.name)
-			copy(h.value[:], header.value)
+			h.key = strings.clone(header.name)
+			h.value = strings.clone(header.value)
 			append(&req.headers, h)
 		}
 
@@ -745,27 +745,27 @@ import_insomnia_v4_collection :: proc(data: []byte, scratch_allocator: mem.Alloc
 			req.auth.type = .Basic
 
 			if request.authentication.username != "" {
-				copy(req.auth.basic_username[:], request.authentication.username)
+				req.auth.basic_username = strings.clone(request.authentication.username)
 			}
 			if request.authentication.password != "" {
-				copy(req.auth.basic_password[:], request.authentication.password)
+				req.auth.basic_password = strings.clone(request.authentication.password)
 			}
 		case "bearer":
 			req.auth.type = .Token
 			if request.authentication.token != "" {
-				copy(req.auth.bearer_token[:], request.authentication.token)
+				req.auth.bearer_token = strings.clone(request.authentication.token)
 			}
 			if request.authentication.prefix != "" {
-				copy(req.auth.bearer_prefix[:], request.authentication.prefix)
+				req.auth.bearer_prefix = strings.clone(request.authentication.prefix)
 			}
 		case "apikey":
 			req.auth.type = .ApiKey
 
 			if request.authentication.key != "" {
-				copy(req.auth.api_key_key[:], request.authentication.key)
+				req.auth.api_key_key = strings.clone(request.authentication.key)
 			}
 			if request.authentication.value != "" {
-				copy(req.auth.api_key_value[:], request.authentication.value)
+				req.auth.api_key_value = strings.clone(request.authentication.value)
 			}
 			switch request.authentication.add_to {
 			case "cookie":
@@ -818,7 +818,7 @@ import_insomnia_v4_collection :: proc(data: []byte, scratch_allocator: mem.Alloc
 							// Look up value from Insomnia's path_parameters
 							for param in request.path_parameters {
 								if param.name == key {
-									copy(p.value[:], param.value)
+									p.value = strings.clone(param.value)
 									break
 								}
 							}
@@ -859,8 +859,8 @@ import_insomnia_v4_collection :: proc(data: []byte, scratch_allocator: mem.Alloc
 
 			for field in request.body.params {
 				f := FormField{id = rand.int63()}
-				copy(f.key[:], field.name)
-				copy(f.value[:], field.value)
+				f.key = strings.clone(field.name)
+				f.value = strings.clone(field.value)
 				append(&req.body.structured, f)
 			}
 		case "multipart/form-data":
@@ -869,9 +869,9 @@ import_insomnia_v4_collection :: proc(data: []byte, scratch_allocator: mem.Alloc
 
 			for field in request.body.params {
 				f := FormField{id = rand.int63()}
-				copy(f.key[:], field.name)
+				f.key = strings.clone(field.name)
 				// TODO: need a real example with field value being file
-				copy(f.value[:], field.value)
+				f.value = strings.clone(field.value)
 				append(&req.body.structured, f)
 			}
 		case:
@@ -925,7 +925,7 @@ import_hoppscotch_v11_collections :: proc(data: []byte, scratch_allocator: mem.A
 
 		for hoppscotch_request in hoppscotch_collection.requests {
 			request := Request{id = rand.int63()}
-			copy(request.name[:], hoppscotch_request.name)
+			request.name = strings.clone(hoppscotch_request.name)
 			switch hoppscotch_request.method {
 			case "GET": request.method = .Get
 			case "PUT": request.method = .Put
@@ -949,10 +949,10 @@ import_hoppscotch_v11_collections :: proc(data: []byte, scratch_allocator: mem.A
 				for query in queries {
 					p := QueryParam{id = rand.int63()}
 					key_value := strings.split_n(query, "=", 2, allocator = scratch_allocator)
-					copy(p.key[:], key_value[0])
+					p.key = strings.clone(key_value[0])
 
 					if len(key_value) > 1 {
-						copy(p.value[:], key_value[1])
+						p.value = strings.clone(key_value[1])
 					}
 
 					append(&request.query_params, p)
@@ -962,9 +962,9 @@ import_hoppscotch_v11_collections :: proc(data: []byte, scratch_allocator: mem.A
 			outer:
 			for param in hoppscotch_request.query {
 				for &existing_param in request.query_params {
-					if mem.compare(existing_param.key[:len(param.key)], transmute([]u8)param.key) == 0 {
+					if existing_param.key == param.key {
 						log.warnf("Found a duplicate query param \"%s\". Updating value", param.key)
-						copy(existing_param.value[:], param.value)
+						existing_param.value = strings.clone(param.value)
 
 						continue outer
 					}
@@ -972,16 +972,16 @@ import_hoppscotch_v11_collections :: proc(data: []byte, scratch_allocator: mem.A
 
 				p := QueryParam{id = rand.int63()}
 				p.disabled = !param.active
-				copy(p.key[:], param.key)
-				copy(p.value[:], param.value)
+				p.key = strings.clone(param.key)
+				p.value = strings.clone(param.value)
 
 				append(&request.query_params, p)
 			}
 
 			for header in hoppscotch_request.headers {
 				h := RequestHeader{id = rand.int63()}
-				copy(h.key[:], header.key)
-				copy(h.value[:], header.value)
+				h.key = strings.clone(header.key)
+				h.value = strings.clone(header.value)
 				h.disabled = !header.active
 				append(&request.headers, h)
 			}
@@ -1052,11 +1052,11 @@ import_postman_environment :: proc(data: []byte, scratch_allocator: mem.Allocato
 	json.unmarshal(data, &postman_environment, allocator = scratch_allocator) or_return
 
 	environment.id = rand.int63()
-	copy(environment.name[:], postman_environment.name)
+	environment.name = strings.clone(postman_environment.name)
 	for variable in postman_environment.values {
 		field := EnvironmentVariableField{enabled = variable.enabled}
-		copy(field.variable[:], variable.key)
-		copy(field.value[:], variable.value)
+		field.variable = strings.clone(variable.key)
+		field.value = strings.clone(variable.value)
 
 		append(&environment.variables, field)
 	}
