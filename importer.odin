@@ -575,10 +575,10 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 	}
 
 	build_collection :: proc(postman_collection: PostmanCollectionItem, scratch_allocator: mem.Allocator) -> ^Collection {
-		collection := new(Collection, state.collection_allocator)
+		collection := new(Collection)
 		collection.id = rand.int63()
-		collection.name = strings.clone(postman_collection.name, state.collection_allocator)
-		collection.requests = make([dynamic]Request, state.collection_allocator)
+		collection.name = strings.clone(postman_collection.name)
+		collection.requests = make([dynamic]Request)
 		if auth, ok := postman_collection.auth.?; ok {
 			collection.auth = parse_postman_auth(auth, postman_collection.name, "collection")
 		}
@@ -609,10 +609,10 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 		return collection
 	}
 
-	collection = new(Collection, state.collection_allocator)
+	collection = new(Collection)
 	collection.id = rand.int63()
-	collection.name = strings.clone(postman_collection.info.name, state.collection_allocator)
-	collection.requests = make([dynamic]Request, state.collection_allocator)
+	collection.name = strings.clone(postman_collection.info.name)
+	collection.requests = make([dynamic]Request)
 	if auth, ok := postman_collection.auth.?; ok {
 		collection.auth = parse_postman_auth(auth, postman_collection.info.name, "collection")
 	}
@@ -671,10 +671,10 @@ import_insomnia_v4_collection :: proc(data: []byte, scratch_allocator: mem.Alloc
 		return nil, nil
 	}
 
-	collection = new(Collection, state.collection_allocator)
+	collection = new(Collection)
 	collection.id = rand.int63()
-	collection.name = strings.clone(workspace.?.name, state.collection_allocator)
-	collection.requests = make([dynamic]Request, state.collection_allocator)
+	collection.name = strings.clone(workspace.?.name)
+	collection.requests = make([dynamic]Request)
 
 	mapped_folders := make(map[string]^Collection, scratch_allocator)
 	mapped_folders[workspace.?.id] = collection
@@ -690,10 +690,10 @@ import_insomnia_v4_collection :: proc(data: []byte, scratch_allocator: mem.Alloc
 			continue
 		}
 
-		child := new(Collection, state.collection_allocator)
+		child := new(Collection)
 		child.id = rand.int63()
-		child.name = strings.clone(folder.name, state.collection_allocator)
-		child.requests = make([dynamic]Request, state.collection_allocator)
+		child.name = strings.clone(folder.name)
+		child.requests = make([dynamic]Request)
 
 		mapped_folders[folder.id] = child
 	}
@@ -918,10 +918,10 @@ import_hoppscotch_v11_collections :: proc(data: []byte, scratch_allocator: mem.A
 	json.unmarshal(data, &root, allocator = scratch_allocator) or_return
 
 	build_collection :: proc(hoppscotch_collection: HoppscotchV11Collection, scratch_allocator: mem.Allocator) -> ^Collection {
-		collection := new(Collection, state.collection_allocator)
+		collection := new(Collection)
 		collection.id = rand.int63()
-		collection.name = strings.clone(hoppscotch_collection.name, state.collection_allocator)
-		collection.requests = make([dynamic]Request, state.collection_allocator)
+		collection.name = strings.clone(hoppscotch_collection.name)
+		collection.requests = make([dynamic]Request)
 
 		for hoppscotch_request in hoppscotch_collection.requests {
 			request := Request{id = rand.int63()}

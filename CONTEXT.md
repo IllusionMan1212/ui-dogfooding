@@ -47,3 +47,24 @@ The invisible interactive region (`hit_thickness` pixels wide) around the splitt
 
 ### Brand Color
 Teal/green `#16BAA4`. Defined as `THEME_BORDER_BRAND_DEFAULT` and `THEME_BACKGROUND_BRAND_SOLID` in `theme.odin`. Used for the splitter's hover state.
+
+## Memory & Lifetimes
+
+### Ownership model
+Every persistent entity and everything it transitively owns lives on the **default heap** (`context.allocator`). There are no model-specific arenas — the old `state.collection_allocator` is gone. The rules:
+
+- Exactly one `create_*` and one `destroy_*` per entity. `destroy_*` frees **precisely** what was allocated, so a single call fully reclaims an entity.
+- Every reassignment of an owned `string` is **delete-then-clone** (`delete(x.name); x.name = strings.clone(new)`), never clone-only. This is the pattern behind `rename_workspace`/`rename_collection`; cloning without deleting is a leak.
+
+| Entity | Stored as | Owns (heap) | Destroy |
+|---|---|---|---|
+| Workspace | `state.workspaces: [dynamic]Workspace` | `name`, `collections`, `environments` | `destroy_workspace` |
+| Collection | `Workspace.collections: [dynamic]^Collection` (stable ptrs) + tree links | `name`, `requests`, nested request data | `destroy_collection` |
+| Request | value in `collection.requests`, or `new(Request)` for standalone tabs | url/body/response builders, `query_params`, `headers`, `path_params`, `body.structured[].file_paths`, `body.binary_path` | `destroy_request` |
+| Environment | `Workspace.environments: [dynamic]^Environment` (stable ptrs) | `variables` | `destroy_environment` |
+
+### Stable pointers, not interior pointers
+`state.tabs` (`^Request`/`^Collection`/`^Environment`) and `state.active_environment` hold raw pointers, so the entities they reference must be **individually heap-allocated** (`new`) and stored as pointer-slices — never as interior pointers into a `[dynamic]Value` array, which reallocates on append and shifts on `ordered_remove`. Collections and environments are both `[dynamic]^T`. Requests opened from a collection are copy-on-open into their own `new(Request)` (the tab owns its copy and has `is_modified`); collections/environments are edited live (no `is_modified` flag).
+
+### Detach before free
+Before freeing an entity that a tab can reference, detach the tab first: `detach_collection_tabs` (orphans request tabs as unsaved, closes collection tabs across the subtree) and `detach_environment_tabs` (closes env tabs, clears `active_environment`). `delete_collection` and `delete_workspace` do this, then call the `destroy_*` teardown. Moving an environment between workspaces does **not** detach — the heap pointer stays valid, so the tab follows the environment.

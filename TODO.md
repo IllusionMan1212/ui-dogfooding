@@ -28,7 +28,7 @@ Next on the list:-
 
 - Big Refactors:-
     - [ ] Move away from fixed buffers for names and everything else.
-    - [ ] Better lifetime grouping for memory allocations.
+    - [x] Better lifetime grouping for memory allocations.
 
 - UI:
     - [ ] We have to assert or something when the stack pushes and pops don't match up. A lot of times I forget to pop something or push something too many times and styles leak.

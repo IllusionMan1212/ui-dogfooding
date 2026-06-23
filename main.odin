@@ -314,7 +314,7 @@ Workspace :: struct {
     id: i64,
     name: string `fmt:"s,"`, // Limited to 64 characters (NOT BYTES!)
     collections: [dynamic]^Collection,
-    environments: [dynamic]Environment,
+    environments: [dynamic]^Environment,
     selected_environment_id: i64 `json:"selected_environment_id"`,
 }
 
@@ -432,8 +432,6 @@ State :: struct {
     workspaces: [dynamic]Workspace,
     active_workspace_index: int,
     active_environment: ^Environment,
-    collection_arena: virtual.Arena,
-    collection_allocator: mem.Allocator,
 
     hasher: ^xxhash.XXH3_state `fmt:"-"`,
 
@@ -925,10 +923,10 @@ draw_workspace_create_dialog :: proc() {
 create_collection :: proc() {
     collection_name := strings.trim_space(strings.to_string(state.collection_name_builder))
 
-    collection := new(Collection, state.collection_allocator)
+    collection := new(Collection)
     collection.id = rand.int63()
-    collection.requests = make([dynamic]Request, state.collection_allocator)
-    collection.name = strings.clone(collection_name, state.collection_allocator)
+    collection.requests = make([dynamic]Request)
+    collection.name = strings.clone(collection_name)
 
     parent := state.collection_creation_parent
 
@@ -1756,13 +1754,17 @@ delete_workspace :: proc() {
         }
     }
 
-    // Delete by the 0th index because delete_collection also removes the collection from the workspace's collections slice which shifts everything down
-    for len(state.workspaces[target_idx].collections) > 0 {
-        collection := state.workspaces[target_idx].collections[0]
-        delete_collection(collection, target_idx)
+    workspace := &state.workspaces[target_idx]
+
+    // Detach any open tabs that reference this workspace's entities before freeing them.
+    for collection in workspace.collections {
+        detach_collection_tabs(collection)
     }
-    delete(state.workspaces[target_idx].collections)
-    delete(state.workspaces[target_idx].name)
+    for environment in workspace.environments {
+        detach_environment_tabs(environment)
+    }
+
+    destroy_workspace(workspace)
 
     ordered_remove(&state.workspaces, target_idx)
 
@@ -2501,8 +2503,8 @@ draw_environments_list :: proc() {
             engine.ui_set_next_width(engine.ui_fill())
             engine.ui_set_next_height(engine.ui_fill())
             engine.ui_column(); {
-                for &environment, i in state.workspaces[state.active_workspace_index].environments {
-                    draw_environment_item(&environment, i)
+                for environment, i in state.workspaces[state.active_workspace_index].environments {
+                    draw_environment_item(environment, i)
                 }
             }
         }
@@ -3751,12 +3753,10 @@ save_workspaces :: proc() {
 }
 
 load_workspaces :: proc() {
-    // Free the entire collection arena since we will be loading different collections.
-    free_all(state.collection_allocator)
-    // unmarshal allocates a new dynamic array every time so we delete it every time.
-    for workspace in state.workspaces {
-        delete(workspace.name)
-        delete(workspace.collections)
+    // Fully reclaim the previously-loaded workspaces before re-parsing. This is only ever
+    // called at startup (before any tabs exist), so there are no tab references to detach.
+    for &workspace in state.workspaces {
+        destroy_workspace(&workspace)
     }
     delete(state.workspaces)
 
@@ -3826,9 +3826,6 @@ load_workspaces :: proc() {
 }
 
 load_config_and_initialize_state :: proc() {
-    ensure(virtual.arena_init_static(&state.collection_arena) == nil, "Failed to allocate memory")
-    state.collection_allocator = virtual.arena_allocator(&state.collection_arena)
-
     state.config.timeout_ms = TIMEOUT_DEFAULT_MS   // baseline; JSON overrides only if the key is present
     defer {
         strings.builder_reset(&state.timeout_builder)
@@ -4021,6 +4018,9 @@ destroy_request :: proc(request: ^Request) {
     }
 }
 
+// Pure memory teardown for a collection subtree: destroys every request, recurses into
+// child collections, then frees each collection's name and the struct itself. Does NOT
+// touch tabs or the workspace's collections slice — see delete_collection for that.
 destroy_collection :: proc(collection: ^Collection) {
     for &request in collection.requests {
         destroy_request(&request)
@@ -4031,28 +4031,51 @@ destroy_collection :: proc(collection: ^Collection) {
         destroy_collection(child)
     }
 
-    free(collection, state.collection_allocator)
+    delete(collection.name)
+    free(collection)
+}
+
+// Frees everything a workspace owns: its name, its collection subtrees, and its
+// (heap-allocated) environments. The workspaces slice itself is the caller's concern.
+destroy_workspace :: proc(workspace: ^Workspace) {
+    for collection in workspace.collections {
+        destroy_collection(collection)
+    }
+    delete(workspace.collections)
+
+    for environment in workspace.environments {
+        destroy_environment(environment)
+        free(environment)
+    }
+    delete(workspace.environments)
+
+    delete(workspace.name)
 }
 
 cleanup :: proc() {
-    for workspace in state.workspaces {
-        for collection in workspace.collections {
-            destroy_collection(collection)
-        }
-    }
     for tab_item in state.tabs {
         switch v in tab_item {
         case ^Request:
             destroy_request(v)
             free(v)
         case ^Collection:
-            // no-op
+            // Owned by its workspace; freed in destroy_workspace below.
         case ^Environment:
-            // TODO:?
+            // Owned by its workspace; freed in destroy_workspace below.
         }
     }
     delete(state.tabs)
+
+    for &workspace in state.workspaces {
+        destroy_workspace(&workspace)
+    }
     delete(state.workspaces)
+
+    strings.builder_destroy(&state.timeout_builder)
+    strings.builder_destroy(&state.workspace_name_builder)
+    strings.builder_destroy(&state.collection_name_builder)
+    strings.builder_destroy(&state.request_name_builder)
+    strings.builder_destroy(&state.environment_name_builder)
 }
 
 update_url_from_query_params :: proc(request: ^Request) {
@@ -4248,6 +4271,7 @@ request_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) -> 
 
                 /// Text
                 io.write_string(w, `"text":`) or_return
+                // TODO: what is this abomination??
                 io.write_quoted_string(w, string(cstring(raw_data(string(body.text.buf[:]))))) or_return
                 io.write_byte(w, ',') or_return
 
@@ -4353,11 +4377,20 @@ workspace_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) -
                 opt: json.Marshal_Options
 
                 json.marshal_to_writer(w, collections, &opt) or_return
-            case [dynamic]Environment:
-                environments := ((cast(^[dynamic]Environment)(data))^)
-                opt: json.Marshal_Options
+            case [dynamic]^Environment:
+                environments := ((cast(^[dynamic]^Environment)(data))^)
+                sub_opt: json.Marshal_Options
 
-                json.marshal_to_writer(w, environments, &opt) or_return
+                // Environments are stored as heap pointers, but the registered marshaler is
+                // for the value type, so deref each element (zero-copy: &env^ == env).
+                io.write_byte(w, '[') or_return
+                for environment, env_idx in environments {
+                    if env_idx != 0 {
+                        io.write_byte(w, ',') or_return
+                    }
+                    json.marshal_to_writer(w, environment^, &sub_opt) or_return
+                }
+                io.write_byte(w, ']') or_return
             }
         }
     }
@@ -4765,7 +4798,7 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
     children := val["children"].(json.Array)
 
     a_err: runtime.Allocator_Error
-    collection, a_err = new(Collection, state.collection_allocator)
+    collection, a_err = new(Collection)
     #partial switch a_err {
     case nil: // no-op
     case .Out_Of_Memory:
@@ -4774,7 +4807,7 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
         return nil, .Invalid_Allocator
     }
     collection.id = id
-    collection.requests, a_err = make([dynamic]Request, state.collection_allocator)
+    collection.requests, a_err = make([dynamic]Request)
     #partial switch a_err {
     case nil: // no-op
     case .Out_Of_Memory:
@@ -4782,7 +4815,7 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
     case:
         return nil, .Invalid_Allocator
     }
-    collection.name = strings.clone(name, state.collection_allocator)
+    collection.name = strings.clone(name)
 
     // Unmarshal collection-level auth (optional, for backwards compatibility with older saves)
     #partial switch auth in val["auth"] {
@@ -5078,7 +5111,8 @@ workspace_unmarshaller :: proc(p: ^json.Parser, v: any) -> json.Unmarshal_Error 
                 name := env["name"].(json.String)
                 variables := env["variables"].(json.Array)
 
-                environment := Environment{id = id}
+                environment := new(Environment)
+                environment.id = id
                 copy(environment.name[:], name)
 
                 for f in variables {
@@ -5287,7 +5321,7 @@ current_workspace_selected_environment :: proc() -> ^Environment {
     }
 
     workspace := &state.workspaces[state.active_workspace_index]
-    return &workspace.environments[index]
+    return workspace.environments[index]
 }
 
 lookup_environment_variable_value :: proc(key: string) -> (string, bool) {
@@ -6054,7 +6088,42 @@ new_request_tab :: proc() {
     append(&state.tabs, req)
 }
 
+// Detaches any open tabs that reference a collection subtree, without freeing memory:
+// orphans request tabs whose request lives in the subtree (marking them unsaved) and
+// closes any collection tab pointing at a node in the subtree.
+detach_collection_tabs :: proc(collection: ^Collection) {
+    for &request in collection.requests {
+        for &tab in state.tabs {
+            req, is_request := tab.(^Request)
+            if !is_request { continue }
+
+            if req.id == request.id {
+                req.collection = nil
+                req.is_modified = true
+                req.modification_hash = 0
+
+                break
+            }
+        }
+    }
+
+    for i := len(state.tabs) - 1; i >= 0; i -= 1 {
+        tab_collection, is_collection := state.tabs[i].(^Collection)
+        if is_collection && tab_collection == collection {
+            ordered_remove(&state.tabs, i)
+            if state.active_tab_index >= i {
+                state.active_tab_index -= 1
+            }
+        }
+    }
+
+    for child := collection.first; child != nil; child = child.next {
+        detach_collection_tabs(child)
+    }
+}
+
 delete_collection :: proc(collection: ^Collection, collection_workspace_idx: int) {
+    // Unlink the root from its parent / siblings (children are freed wholesale below).
     if collection.parent != nil {
         if collection.parent.first == collection {
             collection.parent.first = collection.next
@@ -6070,35 +6139,8 @@ delete_collection :: proc(collection: ^Collection, collection_workspace_idx: int
         collection.next.prev = collection.prev
     }
 
-    for child := collection.first; child != nil; child = child.next {
-        delete_collection(child, collection_workspace_idx)
-    }
-
-    for &request in collection.requests {
-        for &tab, i in state.tabs {
-            req, is_request := tab.(^Request)
-            if !is_request { continue }
-
-            if req.id == request.id {
-                req.collection = nil
-                req.is_modified = true
-                req.modification_hash = 0
-
-                break
-            }
-        }
-
-        destroy_request(&request)
-    }
-    delete(collection.requests)
-
-    // Close any open collection tab pointing to this collection
-    for i := cast(i32)len(state.tabs) - 1; i >= 0; i -= 1 {
-        tab_collection, is_collection := state.tabs[i].(^Collection)
-        if is_collection && tab_collection == collection {
-            ordered_remove(&state.tabs, i)
-        }
-    }
+    // Detach tab references across the whole subtree before any memory is freed.
+    detach_collection_tabs(collection)
 
     if collection.parent == nil {
         for coll, i in state.workspaces[collection_workspace_idx].collections {
@@ -6109,7 +6151,7 @@ delete_collection :: proc(collection: ^Collection, collection_workspace_idx: int
         }
     }
 
-    free(collection, state.collection_allocator)
+    destroy_collection(collection)
 }
 
 rename_collection :: proc(collection: ^Collection, new_name: string) {
@@ -6118,20 +6160,20 @@ rename_collection :: proc(collection: ^Collection, new_name: string) {
         return
     }
 
-    // Names are arena-allocated; the old allocation is reclaimed when the arena is freed.
-    collection.name = strings.clone(name, state.collection_allocator)
+    delete(collection.name)
+    collection.name = strings.clone(name)
 
     save_workspaces()
 }
 
 clone_collection :: proc(src: ^Collection, parent: ^Collection) -> ^Collection {
-    dst := new(Collection, state.collection_allocator)
+    dst := new(Collection)
     dst.id = rand.int63()
-    dst.name = strings.clone(src.name, state.collection_allocator)
+    dst.name = strings.clone(src.name)
     dst.auth = src.auth
     dst.parent = parent
     dst.is_expanded = src.is_expanded
-    dst.requests = make([dynamic]Request, state.collection_allocator)
+    dst.requests = make([dynamic]Request)
 
     for &req in src.requests {
         new_req := Request{}
@@ -6329,7 +6371,8 @@ create_environment :: proc(name: string) {
         return
     }
 
-    environment := Environment{id = rand.int63()}
+    environment := new(Environment)
+    environment.id = rand.int63()
     copy(environment.name[:63], trimmed)
 
     append(&state.workspaces[state.active_workspace_index].environments, environment)
@@ -6348,10 +6391,35 @@ rename_environment :: proc(idx: int, new_name: string) {
         return
     }
 
-    mem.zero_item(&environments[idx].name)
-    copy(environments[idx].name[:63], name)
+    env := environments[idx]
+    mem.zero_item(&env.name)
+    copy(env.name[:63], name)
 
     save_workspaces()
+}
+
+// Frees everything an environment owns. The slot/pointer is the caller's concern.
+destroy_environment :: proc(environment: ^Environment) {
+    delete(environment.variables)
+}
+
+// Closes any open tab pointing at this environment and clears the active reference,
+// without freeing the environment itself. Environments are stable heap pointers, so
+// callers may free the environment afterwards.
+detach_environment_tabs :: proc(environment: ^Environment) {
+    for i := len(state.tabs) - 1; i >= 0; i -= 1 {
+        e, is_environment := state.tabs[i].(^Environment)
+        if is_environment && e == environment {
+            ordered_remove(&state.tabs, i)
+            if state.active_tab_index >= i {
+                state.active_tab_index -= 1
+            }
+        }
+    }
+
+    if state.active_environment == environment {
+        state.active_environment = nil
+    }
 }
 
 delete_environment :: proc(idx: int) {
@@ -6360,30 +6428,18 @@ delete_environment :: proc(idx: int) {
         return
     }
 
-    env := &environments[idx]
+    env := environments[idx]
 
-    // Close any open tab pointing at this environment.
-    for i := len(state.tabs) - 1; i >= 0; i -= 1 {
-        e, is_environment := state.tabs[i].(^Environment)
-        if is_environment && e == env {
-            ordered_remove(&state.tabs, i)
-            if state.active_tab_index >= i {
-                state.active_tab_index -= 1
-            }
-        }
-    }
-
-    if state.active_environment == env {
-        state.active_environment = nil
-    }
+    detach_environment_tabs(env)
 
     // If this environment was selected for the workspace, clear the selection.
     if state.workspaces[state.active_workspace_index].selected_environment_id == env.id {
         state.workspaces[state.active_workspace_index].selected_environment_id = -1
     }
 
-    delete(env.variables)
     ordered_remove(environments, idx)
+    destroy_environment(env)
+    free(env)
 
     save_workspaces()
 }
@@ -6399,22 +6455,10 @@ move_environment_to_workspace :: proc(idx: int, dst_workspace_idx: int) {
         return
     }
 
+    // The environment is a stable heap pointer, so it (and any open tab pointing at it)
+    // stays valid when it moves between workspaces — just move the pointer.
     env := environments[idx]
 
-    // Close any open tab pointing at this environment, the pointer is about to be invalidated.
-    for i := len(state.tabs) - 1; i >= 0; i -= 1 {
-        e, is_environment := state.tabs[i].(^Environment)
-        if is_environment && e == &environments[idx] {
-            ordered_remove(&state.tabs, i)
-            if state.active_tab_index >= i {
-                state.active_tab_index -= 1
-            }
-        }
-    }
-
-    if state.active_environment == &environments[idx] {
-        state.active_environment = nil
-    }
     was_selected := state.workspaces[src_workspace_idx].selected_environment_id == env.id
     if was_selected {
         state.workspaces[src_workspace_idx].selected_environment_id = -1
@@ -6438,7 +6482,7 @@ open_environment_tab :: proc(idx: int) {
         return
     }
 
-    env := &environments[idx]
+    env := environments[idx]
 
     for tab, i in state.tabs {
         e, is_environment := tab.(^Environment)
@@ -6554,7 +6598,9 @@ export_collection_to_file :: proc(collection: ^Collection, file_path: string) ->
 }
 
 append_environment :: proc(environment: Environment) {
-    append(&state.workspaces[state.active_workspace_index].environments, environment)
+    env := new(Environment)
+    env^ = environment
+    append(&state.workspaces[state.active_workspace_index].environments, env)
 }
 
 import_environment_from_file :: proc(file_path: string) -> bool {
@@ -6658,7 +6704,7 @@ export_environment_via_dialog :: proc(idx: int) {
     if idx < 0 || idx >= len(environments) {
         return
     }
-    env := &environments[idx]
+    env := environments[idx]
     name := string(cstring(&env.name[0]))
     default_name := fmt.tprintf("%s.postman_environment.json", sanitize_export_file_name(name, "environment", context.temp_allocator))
     path, ok := engine.file_dialog_save("Export Environment", default_name, JSON_FILE_FILTERS, context.temp_allocator)
