@@ -530,10 +530,10 @@ logger: log.Logger
 state: State
 logo: engine.TextureId
 
-SCROLLBAR_V :: #force_inline proc(scroll_box: ^engine.Box) {
+SCROLLBAR_V :: #force_inline proc(scroll_box: ^engine.Box, id: engine.Id) {
     engine.ui_set_next_width(engine.ui_px(6, 1))
     engine.ui_set_next_height(engine.ui_fill())
-    scrollbar := engine.ui_scrollbar_y_for(scroll_box)
+    scrollbar := engine.ui_scrollbar_y_for(scroll_box, id)
     scrollbar.background_color = {0,0,0,0}
     scrollbar.border_color = engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme])
     scrollbar.border_radius = THEME_BORDER_RADIUS_MD
@@ -2331,7 +2331,7 @@ draw_collections_list :: proc() {
                 }
 
                 engine.ui_spacer(engine.ui_px(4, 1))
-                SCROLLBAR_V(scroll_box)
+                SCROLLBAR_V(scroll_box, engine.ui_make_id("sidebar_collections_scrollbar"))
                 engine.ui_spacer(engine.ui_px(2, 1))
             }
         }
@@ -3791,7 +3791,7 @@ draw_request_main_area :: proc(req: ^Request) {
                 }
 
                 engine.ui_spacer(engine.ui_px(4, 1))
-                SCROLLBAR_V(scroll_box)
+                SCROLLBAR_V(scroll_box, engine.ui_make_id("request_area_scrollbar"))
                 engine.ui_spacer(engine.ui_px(2, 1))
             }
         }

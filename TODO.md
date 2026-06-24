@@ -27,7 +27,7 @@ Next on the list:-
     - Need a way to isolate shortcuts for different components/UI
 
 - BUGS:
-    - [ ] Opening a tab causes the sidebar's scrollbar to be unresponsive to mouse dragging.
+    - [x] Opening a tab causes the sidebar's scrollbar to be unresponsive to mouse dragging.
     - [ ] Hovering over the sidebar tabs while having a collection/environment open causes the text size to leak to the open tab
 
 - Tab Switcher:-
