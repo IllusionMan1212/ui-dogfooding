@@ -69,6 +69,10 @@ ENVIRONMENT_MOVE_DIALOG_ID :: #hash("move_environment_dialog", "fnv32a")
 SIDEBAR_COLLECTION_CONTEXT_MENU_ID :: #hash("sidebar_collection_context_menu", "fnv32a")
 SIDEBAR_REQUEST_CONTEXT_MENU_ID :: #hash("sidebar_request_context_menu", "fnv32a")
 SIDEBAR_ENVIRONMENT_CONTEXT_MENU_ID :: #hash("sidebar_environment_context_menu", "fnv32a")
+TAB_CONTEXT_MENU_ID :: #hash("tab_context_menu", "fnv32a")
+ENVIRONMENT_SELECTOR_ID :: #hash("environment_selector", "fnv32a")
+TAB_RENAME_DIALOG_ID :: #hash("rename_tab_dialog", "fnv32a")
+TAB_RENAME_NAME_INPUT_ID :: #hash("rename_tab_name_input", "fnv32a")
 SETTINGS_DIALOG_ID :: #hash("settings_dialog", "fnv32a")
 ABOUT_DIALOG_ID :: #hash("about_dialog", "fnv32a")
 
@@ -477,6 +481,22 @@ State :: struct {
     // Environment create/rename/delete/move dialog state
     environment_name_builder: strings.Builder,
     environment_target_idx: int,
+
+    // Tab bar context menu / rename dialog state
+    tab_context_menu_index: int,
+    tab_rename_index: int,
+    tab_name_builder: strings.Builder,
+
+    // Ctrl+Tab MRU switcher. tab_mru holds tab identity pointers with the most-recently-used
+    // tab at the END (append/remove only). The switcher session captures candidate tab indices
+    // in MRU order (most recent first) and commits the highlighted one when Ctrl is released.
+    tab_mru: [dynamic]rawptr,
+    tab_switcher_active: bool,
+    tab_switcher_candidates: [dynamic]int,
+    tab_switcher_pos: int,
+    // Set on frames where the cursor actually moved. Hover only re-asserts the selection on such
+    // frames, so a stationary cursor sitting over an item never fights keyboard/arrow navigation.
+    tab_switcher_mouse_moved: bool,
 }
 
 logger: log.Logger
@@ -1006,7 +1026,7 @@ draw_context_menu_item :: proc(id_str: string, label: string, danger := false) -
     return engine.ui_clicked(sig)
 }
 
-sidebar_context_menu_style :: proc() {
+context_menu_style :: proc() {
     engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
     engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
     engine.ui_set_next_border_thickness(0.5)
@@ -1017,7 +1037,7 @@ sidebar_context_menu_style :: proc() {
 draw_collection_context_menu :: proc() {
     collection := state.context_menu_collection
 
-    sidebar_context_menu_style()
+    context_menu_style()
     if engine.ui_popup_begin(SIDEBAR_COLLECTION_CONTEXT_MENU_ID, nil) {
         engine.ui_set_next_width(engine.ui_px(176, 1))
         engine.ui_set_next_height(engine.ui_children_sum(1))
@@ -1070,7 +1090,7 @@ draw_request_context_menu :: proc() {
     collection := state.context_menu_collection
     request_id := state.context_menu_request_id
 
-    sidebar_context_menu_style()
+    context_menu_style()
     if engine.ui_popup_begin(SIDEBAR_REQUEST_CONTEXT_MENU_ID, nil) {
         engine.ui_set_next_width(engine.ui_px(120, 1))
         engine.ui_set_next_height(engine.ui_children_sum(1))
@@ -1101,7 +1121,7 @@ draw_request_context_menu :: proc() {
 draw_environment_context_menu :: proc() {
     idx := state.context_menu_environment_idx
 
-    sidebar_context_menu_style()
+    context_menu_style()
     if engine.ui_popup_begin(SIDEBAR_ENVIRONMENT_CONTEXT_MENU_ID, nil) {
         engine.ui_set_next_width(engine.ui_px(176, 1))
         engine.ui_set_next_height(engine.ui_children_sum(1))
@@ -1133,6 +1153,91 @@ draw_environment_context_menu :: proc() {
         }
         engine.ui_popup_end()
     }
+}
+
+draw_tab_context_menu :: proc() {
+    index := state.tab_context_menu_index
+    assert(index >= 0 && index < len(state.tabs), "Invalid tab context menu index")
+
+    tab := state.tabs[index]
+    _, is_request := tab.(^Request)
+
+    context_menu_style()
+    if engine.ui_popup_begin(TAB_CONTEXT_MENU_ID, nil) {
+        engine.ui_set_next_width(engine.ui_px(160, 1))
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_column(); {
+            engine.ui_padding(THEME_SPACING_SM, {.Top, .Bottom, .Left, .Right})
+
+            if draw_context_menu_item("ctx_tab_rename", "Rename") {
+                engine.ui_popup_close()
+                open_tab_rename_dialog(index)
+            }
+            if is_request {
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+                if draw_context_menu_item("ctx_tab_duplicate", "Duplicate") {
+                    duplicate_request_tab(index)
+                    engine.ui_popup_close()
+                }
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            if draw_context_menu_item("ctx_tab_close", "Close tab") {
+                request_close_tab(index)
+                engine.ui_popup_close()
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            if draw_context_menu_item("ctx_tab_close_others", "Close other tabs") {
+                close_other_tabs(index)
+                engine.ui_popup_close()
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            if draw_context_menu_item("ctx_tab_close_all", "Close all tabs") {
+                close_all_tabs()
+                engine.ui_popup_close()
+            }
+        }
+        engine.ui_popup_end()
+    }
+}
+
+open_tab_rename_dialog :: proc(index: int) {
+    assert(index >= 0 && index < len(state.tabs), "Invalid tab index for rename dialog")
+    state.tab_rename_index = index
+    strings.builder_reset(&state.tab_name_builder)
+    strings.write_string(&state.tab_name_builder, tab_name(state.tabs[index]))
+    engine.ui_dialog_open(TAB_RENAME_DIALOG_ID)
+    engine.ui_focus_text_input(TAB_RENAME_NAME_INPUT_ID)
+    engine.ui_text_input_select_all(TAB_RENAME_NAME_INPUT_ID)
+}
+
+draw_tab_rename_dialog :: proc() {
+    draw_dialog(TAB_RENAME_DIALOG_ID, draw_content = proc() {
+        index := state.tab_rename_index
+        assert(index >= 0 && index < len(state.tabs), "Invalid tab index for rename dialog")
+
+        title := "Rename Tab"
+        #partial switch _ in state.tabs[index] {
+        case ^Request:     title = "Rename Request"
+        case ^Collection:  title = "Rename Collection"
+        case ^Environment: title = "Rename Environment"
+        }
+
+        engine.ui_text_sized(title, THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        result := draw_text_input(TAB_RENAME_NAME_INPUT_ID, &state.tab_name_builder, .Medium, engine.TextInputOptions{placeholder = "Name", max_length = 64})
+        name := strings.trim_space(strings.to_string(state.tab_name_builder))
+        if result.submitted && name != "" {
+            rename_tab(state.tabs[index], name)
+            engine.ui_dialog_close()
+        }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+        engine.ui_set_next_width(engine.ui_fill())
+        if draw_button("Save", enabled = name != "") {
+            rename_tab(state.tabs[index], name)
+            engine.ui_dialog_close()
+        }
+    })
 }
 
 open_collection_rename_dialog :: proc(collection: ^Collection) {
@@ -2688,7 +2793,14 @@ draw_sidebar :: proc() {
     }
 }
 
-draw_tab_item_request :: proc(req: ^Request, index: int) {
+draw_tab_item :: proc(tab: TabItem, index: int) {
+    name := tab_name(tab)
+    modified := tab_is_modified(tab)
+    req, is_request := tab.(^Request)
+    _, is_environment := tab.(^Environment)
+
+    leading_icon := is_environment ? ICONS[.Environment] : ICONS[.Folder]
+
     engine.ui_set_next_width(engine.ui_children_sum(1))
     engine.ui_set_next_height(engine.ui_fill())
     engine.ui_set_next_align_y(.Center)
@@ -2707,19 +2819,27 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
             engine.ui_set_next_align_y(.Center)
             engine.ui_set_next_flags({.MouseClickable})
 
-            id := engine.ui_make_id(fmt.tprintf("request_tab_%d", req.id))
+            id := engine.ui_make_id(fmt.tprintf("tab_%d", index))
 
-            tab_box := engine.ui_row(id); {
-                tab_sig := engine.ui_signal_from_box(tab_box)
+            row := engine.ui_row(id); {
+                tab_sig := engine.ui_signal_from_box(row)
                 tab_hovered = engine.ui_hovering(tab_sig)
 
                 if engine.ui_clicked(tab_sig) {
                     state.active_tab_index = index
                 }
 
+                if tab_hovered && engine.virt_mouse_button_has_been_pressed(.RIGHT) {
+                    state.tab_context_menu_index = index
+                    engine.ui_popup_open(TAB_CONTEXT_MENU_ID)
+                }
+
+                if tab_hovered && engine.virt_mouse_button_has_been_pressed(.MIDDLE) {
+                    request_close_tab(index)
+                }
+
                 engine.ui_padding(12, {.Left, .Right})
 
-                name := req.name
                 name_raw_w := engine.ui_text_measure_string(name, THEME_FONT_SIZE_BODY_SM).x
 
                 {
@@ -2727,10 +2847,17 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
                     engine.ui_set_next_width(engine.ui_children_sum(1))
                     engine.ui_set_next_align_y(.Center)
                     engine.ui_row(); {
-                        engine.ui_set_next_font_size(10)
-                        engine.ui_set_next_font_weight(900)
-                        engine.ui_set_next_text_color(http_method_color(req.method))
-                        engine.ui_text(http_method_string(req.method))
+                        // Leading marker: the HTTP method for request tabs, a type icon otherwise.
+                        if is_request {
+                            engine.ui_set_next_font_size(10)
+                            engine.ui_set_next_font_weight(900)
+                            engine.ui_set_next_text_color(http_method_color(req.method))
+                            engine.ui_text(http_method_string(req.method))
+                        } else {
+                            engine.ui_set_next_font_size(16)
+                            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_ICON_BRAND_DEFAULT[state.config.theme]))
+                            engine.ui_text(leading_icon)
+                        }
 
                         engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
 
@@ -2770,7 +2897,7 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
                     engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
                     engine.ui_set_next_background_color(TRANSPARENT)
 
-                    id := engine.ui_make_id(fmt.tprintf("close_request_tab_%d", req.id))
+                    id := engine.ui_make_id(fmt.tprintf("close_tab_%d", index))
 
                     box := engine.ui_row(id); {
                         sig := engine.ui_signal_from_box(box)
@@ -2791,8 +2918,22 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
                         }
 
                         if engine.ui_clicked(sig) {
-                            log.debug("TODO: close tab at index", index)
+                            request_close_tab(index)
                         }
+                    }
+                } else if modified {
+                    // Unsaved-changes dot, shown in place of the close button when not hovered.
+                    engine.ui_set_next_width(engine.ui_px(16, 1))
+                    engine.ui_set_next_height(engine.ui_children_sum(1))
+                    engine.ui_set_next_align_x(.Center)
+                    engine.ui_set_next_align_y(.Center)
+                    engine.ui_row(); {
+                        engine.ui_set_next_width(engine.ui_px(8, 1))
+                        engine.ui_set_next_height(engine.ui_px(8, 1))
+                        engine.ui_set_next_border_radius(4)
+                        engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                        engine.ui_set_next_flags({.DrawBackground})
+                        engine.ui_row()
                     }
                 } else {
                     engine.ui_spacer(engine.ui_px(16, 1))
@@ -2801,15 +2942,18 @@ draw_tab_item_request :: proc(req: ^Request, index: int) {
         }
 
         {
-            method_str := http_method_string(req.method)
-            method_w := engine.ui_text_measure_string(method_str, 10, 900).x
-            name := req.name
+            leading_w: f32
+            if is_request {
+                leading_w = engine.ui_text_measure_string(http_method_string(req.method), 10, 900).x
+            } else {
+                leading_w = engine.ui_text_measure_string(leading_icon, 16).x
+            }
             name_raw_w := engine.ui_text_measure_string(name, THEME_FONT_SIZE_BODY_SM).x
             name_w := min(name_raw_w, f32(80))
             close_icon_w := engine.ui_text_measure_string(ICONS[.Close], 14).x
 
             item_w := f32(12)
-            item_w += method_w + f32(THEME_SPACING_MD) + name_w
+            item_w += leading_w + f32(THEME_SPACING_MD) + name_w
             if tab_hovered {
                 item_w += f32(THEME_SPACING_SM)
                 item_w += 4 + close_icon_w + 4 + 3
@@ -2834,7 +2978,7 @@ draw_tab_bar :: proc() {
     border_width := f32(1)
     tab_bar_width := window_size.x - sidebar_width - border_width
 
-    env_text_sz := engine.ui_text_measure_string("No Environment", 16)
+    env_text_sz := engine.ui_text_measure_string(current_workspace_selected_environment_name(), 16)
     env_icon_sz := engine.ui_text_measure_string(ICONS[.Environment], 16)
     chevron_sz := engine.ui_text_measure_string(ICONS[.Chevron], 16)
     env_button_w := env_text_sz.x + env_icon_sz.x + chevron_sz.x + 16*2 + 8 + 8
@@ -2856,16 +3000,7 @@ draw_tab_bar :: proc() {
             engine.ui_set_next_max_width(available_width)
             engine.ui_scroll_row(); {
                 for tab, index in state.tabs {
-                    switch t in tab {
-                    case ^Request:
-                        draw_tab_item_request(t, index)
-                    case ^Environment:
-                        // TODO:
-                        engine.ui_text(t.name)
-                    case ^Collection:
-                        // TODO:
-                        engine.ui_text(t.name)
-                    }
+                    draw_tab_item(tab, index)
                 }
             }
         }
@@ -2884,11 +3019,207 @@ draw_tab_bar :: proc() {
             engine.ui_row(); {
                 engine.ui_spacer(engine.ui_px(4, 1))
                 BORDER_V()
-                if draw_button("No Environment", .TertiaryGrey, left_icon = .Environment, right_icon = .Chevron) {
-                    // TODO: open environment popup
+                if draw_button(current_workspace_selected_environment_name(), .TertiaryGrey, left_icon = .Environment, right_icon = .Chevron) {
+                    engine.ui_popup_open(ENVIRONMENT_SELECTOR_ID)
                 }
             }
         }
+    }
+
+    if engine.ui_popup_is_open(TAB_CONTEXT_MENU_ID) {
+        draw_tab_context_menu()
+    }
+
+    if engine.ui_popup_is_open(ENVIRONMENT_SELECTOR_ID) {
+        draw_environment_selector_menu()
+    }
+}
+
+// A row in the environment selector popup: the name, plus a trailing brand-coloured check on
+// the currently selected entry (mirrors the workspace selector). Returns true when clicked.
+draw_environment_selector_item :: proc(id_str: string, label: string, selected: bool) -> bool {
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_children_sum(1))
+    engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+    engine.ui_set_next_align_y(.Center)
+    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+
+    box := engine.ui_row(engine.ui_make_id(id_str))
+    sig := engine.ui_signal_from_box(box)
+    {
+        if engine.ui_hovering(sig) {
+            engine.set_cursor(.HAND)
+            box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+        } else {
+            box.background_color = TRANSPARENT
+        }
+
+        engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
+        engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
+
+        {
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_set_next_align_y(.Center)
+            engine.ui_row(); {
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                engine.ui_set_next_font_size(14)
+                engine.ui_text_shrinkable(label)
+            }
+        }
+
+        if selected {
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_BRAND_DEFAULT[state.config.theme]))
+            engine.ui_text_sized(ICONS[.Check], 16)
+        }
+    }
+
+    return engine.ui_clicked(sig)
+}
+
+draw_environment_selector_menu :: proc() {
+    environments := state.workspaces[state.active_workspace_index].environments
+    selected_idx := current_workspace_selected_environment_index()
+
+    context_menu_style()
+    if engine.ui_popup_begin(ENVIRONMENT_SELECTOR_ID, nil) {
+        engine.ui_set_next_width(engine.ui_px(220, 1))
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_column(); {
+            engine.ui_padding(THEME_SPACING_SM, {.Top, .Bottom, .Left, .Right})
+
+            if draw_environment_selector_item("env_sel_none", "No Environment", selected_idx == -1) {
+                set_selected_environment(-1)
+                engine.ui_popup_close()
+            }
+
+            if len(environments) > 0 {
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+                BORDER_H()
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+            }
+
+            for env, i in environments {
+                engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+                if draw_environment_selector_item(fmt.tprintf("env_sel_%d", env.id), env.name, cast(i32)i == selected_idx) {
+                    set_selected_environment(env.id)
+                    engine.ui_popup_close()
+                }
+            }
+        }
+        engine.ui_popup_end()
+    }
+}
+
+// The Ctrl+Tab overlay: a centred HUD listing the switch candidates in MRU order with the
+// current selection highlighted. Selection is committed by tab_switcher_finish on Ctrl release.
+draw_tab_switcher_overlay :: proc() {
+    if !state.tab_switcher_active || len(state.tab_switcher_candidates) == 0 {
+        return
+    }
+
+    win := engine.get_window_size()
+
+    commit_pos := -1
+    dismiss := false
+
+    // Full-screen modal backdrop that centres the panel and swallows hovers/clicks so they
+    // never reach the content behind. Clicking the empty backdrop dismisses the switcher.
+    engine.ui_set_next_flags({.FloatingX, .FloatingY, .DrawBackground, .MouseClickable})
+    engine.ui_set_next_fixed_x(0)
+    engine.ui_set_next_fixed_y(0)
+    engine.ui_set_next_fixed_width(win.x)
+    engine.ui_set_next_fixed_height(win.y)
+    engine.ui_set_next_background_color({0, 0, 0, 0.35})
+    engine.ui_set_next_align_x(.Center)
+    engine.ui_set_next_align_y(.Center)
+    backdrop := engine.ui_column(); {
+        backdrop_sig := engine.ui_signal_from_box(backdrop)
+
+        // MouseClickable so clicks on the panel chrome (padding/gaps) are absorbed rather
+        // than falling through to the backdrop and dismissing the switcher.
+        engine.ui_set_next_flags({.DrawBackground, .DrawBorder, .MouseClickable})
+        engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+        engine.ui_set_next_border_thickness(0.5)
+        engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+        engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_LG)
+        engine.ui_set_next_width(engine.ui_px(360, 1))
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_column(); {
+            engine.ui_padding(THEME_SPACING_SM, {.Top, .Bottom, .Left, .Right})
+
+            for cand_idx, pos in state.tab_switcher_candidates {
+                if cand_idx < 0 || cand_idx >= len(state.tabs) {
+                    continue
+                }
+                if pos != 0 {
+                    engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+                }
+
+                tab := state.tabs[cand_idx]
+
+                engine.ui_set_next_width(engine.ui_fill())
+                engine.ui_set_next_height(engine.ui_children_sum(1))
+                engine.ui_set_next_align_y(.Center)
+                engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+                engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+                row := engine.ui_make_id(fmt.tprintf("tab_switcher_item_%d", pos))
+                row_box := engine.ui_row(row); {
+                    row_sig := engine.ui_signal_from_box(row_box)
+
+                    // Hover re-asserts the selection only on frames where the cursor actually
+                    // moved, so a stationary cursor (over an item or after a keystroke) leaves the
+                    // keyboard's choice alone. Clicking commits to the item.
+                    if engine.ui_hovering(row_sig) {
+                        if state.tab_switcher_mouse_moved {
+                            state.tab_switcher_pos = pos
+                        }
+                        engine.set_cursor(.HAND)
+                    }
+                    if engine.ui_clicked(row_sig) {
+                        commit_pos = pos
+                    }
+
+                    highlighted := pos == state.tab_switcher_pos
+                    row_box.background_color = highlighted ? engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme]) : TRANSPARENT
+
+                    engine.ui_padding(THEME_SPACING_SM, {.Left, .Right})
+                    engine.ui_padding(THEME_SPACING_XS, {.Top, .Bottom})
+
+                    // Leading marker: HTTP method for requests, a type icon otherwise.
+                    if req, ok := tab.(^Request); ok {
+                        engine.ui_set_next_font_size(10)
+                        engine.ui_set_next_font_weight(900)
+                        engine.ui_set_next_text_color(http_method_color(req.method))
+                        engine.ui_text(http_method_string(req.method))
+                    } else {
+                        _, is_env := tab.(^Environment)
+                        engine.ui_set_next_font_size(16)
+                        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_ICON_BRAND_DEFAULT[state.config.theme]))
+                        engine.ui_text(is_env ? ICONS[.Environment] : ICONS[.Folder])
+                    }
+
+                    engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
+
+                    engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
+                    engine.ui_set_next_text_color(engine.color_hex_rgb(highlighted ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                    engine.ui_text_shrinkable(tab_name(tab))
+                }
+            }
+        }
+
+        if engine.ui_clicked(backdrop_sig) {
+            dismiss = true
+        }
+    }
+
+    // Apply mouse-driven outcomes after the loop so the candidate list isn't mutated mid-iteration.
+    if commit_pos >= 0 {
+        state.tab_switcher_pos = commit_pos
+        tab_switcher_finish(true)
+    } else if dismiss {
+        tab_switcher_finish(false)
     }
 }
 
@@ -5276,6 +5607,16 @@ current_workspace_selected_environment_name :: proc() -> string {
     return workspace.environments[index].name
 }
 
+// Sets the active workspace's selected environment by id (-1 to clear) and persists it.
+set_selected_environment :: proc(env_id: i64) {
+    workspace := &state.workspaces[state.active_workspace_index]
+    if workspace.selected_environment_id == env_id {
+        return
+    }
+    workspace.selected_environment_id = env_id
+    save_workspaces()
+}
+
 current_workspace_selected_environment :: proc() -> ^Environment {
     index := current_workspace_selected_environment_index()
     if index < 0 {
@@ -6033,6 +6374,257 @@ new_request_tab :: proc() {
     req.modification_hash = hash_request(req)
 
     append(&state.tabs, req)
+}
+
+tab_name :: proc(tab: TabItem) -> string {
+    switch t in tab {
+    case ^Request:     return t.name
+    case ^Collection:  return t.name
+    case ^Environment: return t.name
+    }
+    unreachable()
+}
+
+// Only request tabs track unsaved edits; collection/environment tabs live-edit their
+// entity (see the tab-ownership model) so they're never "modified".
+tab_is_modified :: proc(tab: TabItem) -> bool {
+    #partial switch t in tab {
+    case ^Request: return t.is_modified
+    }
+    return false
+}
+
+// Frees the memory owned by a tab, respecting the ownership model: request tabs own a
+// private copy and must be destroyed, while collection/environment tabs only alias live
+// entities owned by the workspace and must NOT be freed here.
+free_tab :: proc(tab: TabItem) {
+    #partial switch t in tab {
+    case ^Request:
+        destroy_request(t)
+        free(t)
+    }
+}
+
+// Removes the tab at index and keeps active_tab_index pointing at a sensible neighbour.
+// When the active tab is closed, selection falls to the tab that shifts into its slot
+// (or the new last tab)
+close_tab :: proc(index: int) {
+    // A switcher session captures tab indices, which closing would invalidate.
+    tab_switcher_finish(false)
+
+    remove_tab_from_mru(tab_ptr(state.tabs[index]))
+    free_tab(state.tabs[index])
+    ordered_remove(&state.tabs, index)
+
+    if state.active_tab_index > index {
+        state.active_tab_index -= 1
+    } else if state.active_tab_index == index && state.active_tab_index >= len(state.tabs) {
+        state.active_tab_index = len(state.tabs) - 1
+    }
+}
+
+// User-initiated close (close button / middle-click / Ctrl+W / context menu). Kept as a
+// distinct entry point from close_tab so that an unsaved-changes confirmation can be slotted
+// in here once saving request tabs back to their collection is implemented.
+request_close_tab :: proc(index: int) {
+    close_tab(index)
+}
+
+close_all_tabs :: proc() {
+    tab_switcher_finish(false)
+    for tab in state.tabs {
+        free_tab(tab)
+    }
+    clear(&state.tabs)
+    clear(&state.tab_mru)
+    state.active_tab_index = -1
+}
+
+close_other_tabs :: proc(index: int) {
+    tab_switcher_finish(false)
+
+    keep := state.tabs[index]
+    for tab, i in state.tabs {
+        if i == index {
+            continue
+        }
+        free_tab(tab)
+    }
+    clear(&state.tabs)
+    append(&state.tabs, keep)
+
+    clear(&state.tab_mru)
+    append(&state.tab_mru, tab_ptr(keep))
+
+    state.active_tab_index = 0
+}
+
+// Opens a fresh request tab that is an independent copy of the request at index, marked
+// modified and detached from any collection
+duplicate_request_tab :: proc(index: int) {
+    req, ok := state.tabs[index].(^Request)
+    if !ok {
+        return
+    }
+
+    new_request_tab()
+    dup := state.tabs[len(state.tabs) - 1].(^Request)
+    copy_request_data(dup, req)
+
+    dup.id = rand.int63()
+    dup.modification_hash = 0
+    dup.is_modified = true
+    dup.collection = nil
+    delete(dup.name)
+    dup.name = strings.concatenate({req.name, " (Copy)"})
+
+    state.active_tab_index = len(state.tabs) - 1
+}
+
+// A tab's stable identity is the entity pointer it carries — unique per open tab and used
+// as the key for MRU tracking.
+tab_ptr :: proc(tab: TabItem) -> rawptr {
+    switch t in tab {
+    case ^Request:     return t
+    case ^Collection:  return t
+    case ^Environment: return t
+    }
+    return nil
+}
+
+tab_index_of_ptr :: proc(ptr: rawptr) -> int {
+    for tab, i in state.tabs {
+        if tab_ptr(tab) == ptr {
+            return i
+        }
+    }
+    return -1
+}
+
+remove_tab_from_mru :: proc(ptr: rawptr) {
+    for p, i in state.tab_mru {
+        if p == ptr {
+            ordered_remove(&state.tab_mru, i)
+            return
+        }
+    }
+}
+
+// Marks the tab at index as most-recently-used (moves its identity to the end of tab_mru).
+touch_tab_mru :: proc(index: int) {
+    if index < 0 || index >= len(state.tabs) {
+        return
+    }
+    ptr := tab_ptr(state.tabs[index])
+    remove_tab_from_mru(ptr)
+    append(&state.tab_mru, ptr)
+}
+
+// Begins a Ctrl+Tab switcher session, capturing candidate tab indices in MRU order (most
+// recent first) and pre-selecting the previously used tab.
+tab_switcher_start :: proc() {
+    if len(state.tabs) < 2 {
+        return
+    }
+
+    touch_tab_mru(state.active_tab_index)
+
+    clear(&state.tab_switcher_candidates)
+    for i := len(state.tab_mru) - 1; i >= 0; i -= 1 {
+        idx := tab_index_of_ptr(state.tab_mru[i])
+        if idx >= 0 {
+            append(&state.tab_switcher_candidates, idx)
+        }
+    }
+
+    if len(state.tab_switcher_candidates) < 2 {
+        clear(&state.tab_switcher_candidates)
+        return
+    }
+
+    state.tab_switcher_pos = 1
+    state.tab_switcher_active = true
+}
+
+tab_switcher_advance :: proc(delta: int) {
+    n := len(state.tab_switcher_candidates)
+    if n < 1 {
+        return
+    }
+    state.tab_switcher_pos = ((state.tab_switcher_pos + delta) % n + n) % n
+}
+
+// Ends the switcher session. When commit is true the highlighted candidate becomes the
+// active tab; otherwise the selection is discarded (Escape).
+tab_switcher_finish :: proc(commit: bool) {
+    if !state.tab_switcher_active {
+        return
+    }
+
+    sel := -1
+    if state.tab_switcher_pos >= 0 && state.tab_switcher_pos < len(state.tab_switcher_candidates) {
+        sel = state.tab_switcher_candidates[state.tab_switcher_pos]
+    }
+
+    state.tab_switcher_active = false
+    state.tab_switcher_pos = -1
+    clear(&state.tab_switcher_candidates)
+
+    if commit && sel >= 0 && sel < len(state.tabs) {
+        state.active_tab_index = sel
+        touch_tab_mru(sel)
+    }
+}
+
+// Handles a Ctrl+Tab press: cycles directly between the two tabs when only two are open,
+// otherwise drives the switcher overlay. delta is +1 (forward) or -1 (Shift, backward).
+tab_switcher_on_ctrl_tab :: proc(delta: int) {
+    if len(state.tabs) < 2 {
+        return
+    }
+
+    if state.tab_switcher_active {
+        tab_switcher_advance(delta)
+        return
+    }
+
+    if len(state.tabs) == 2 {
+        other := state.active_tab_index == 0 ? 1 : 0
+        state.active_tab_index = other
+        touch_tab_mru(other)
+        return
+    }
+
+    tab_switcher_start()
+    if delta < 0 {
+        // Backward on the opening press: step past the pre-selected previous tab.
+        tab_switcher_advance(delta - 1)
+    }
+}
+
+// Renames whatever entity a tab points at. Request tabs rename their private copy and
+// recompute the unsaved flag; collection/environment tabs rename the live entity and
+// persist it.
+rename_tab :: proc(tab: TabItem, new_name: string) {
+    name := strings.trim_space(new_name)
+    if name == "" {
+        return
+    }
+
+    switch t in tab {
+    case ^Request:
+        delete(t.name)
+        t.name = strings.clone(name)
+        t.is_modified = hash_request(t) != t.modification_hash
+    case ^Collection:
+        delete(t.name)
+        t.name = strings.clone(name)
+        save_workspaces()
+    case ^Environment:
+        delete(t.name)
+        t.name = strings.clone(name)
+        save_workspaces()
+    }
 }
 
 // Detaches any open tabs that reference a collection subtree, without freeing memory:
@@ -6824,11 +7416,15 @@ main :: proc() {
     for !engine.should_quit() {
         engine.frame_start()
 
+        state.tab_switcher_mouse_moved = false
+
         e := engine.iter_events()
         for e != nil {
             #partial switch e.type {
             case .WINDOW_CLOSED:
                 engine.quit()
+            case .VIRT_MOUSE_MOVED:
+                state.tab_switcher_mouse_moved = true
             case .VIRT_KEY_PRESSED:
                 if e.key.scancode == .F3 {
                     state.show_ui_debug_overlay = !state.show_ui_debug_overlay
@@ -6845,17 +7441,50 @@ main :: proc() {
                 }
                 if e.key.scancode == .W {
                     if .LEFT_CTRL in e.key.mods || .RIGHT_CTRL in e.key.mods {
-                        if len(state.tabs) > 0 {
-                            ordered_remove(&state.tabs, state.active_tab_index)
-                            if state.active_tab_index >= len(state.tabs) {
-                                state.active_tab_index = len(state.tabs) - 1
-                            }
+                        if state.active_tab_index != -1 {
+                            request_close_tab(state.active_tab_index)
                         }
+                    }
+                }
+                if e.key.scancode == .R {
+                    if .LEFT_CTRL in e.key.mods || .RIGHT_CTRL in e.key.mods {
+                        if state.active_tab_index != -1 {
+                            open_tab_rename_dialog(state.active_tab_index)
+                        }
+                    }
+                }
+                if e.key.scancode == .TAB && !e.key.is_repeat {
+                    if .LEFT_CTRL in e.key.mods || .RIGHT_CTRL in e.key.mods {
+                        backward := .LEFT_SHIFT in e.key.mods || .RIGHT_SHIFT in e.key.mods
+                        tab_switcher_on_ctrl_tab(backward ? -1 : 1)
+                    }
+                }
+                if state.tab_switcher_active && !e.key.is_repeat {
+                    if e.key.scancode == .DOWN {
+                        tab_switcher_advance(1)
+                    }
+                    if e.key.scancode == .UP {
+                        tab_switcher_advance(-1)
+                    }
+                }
+                if e.key.scancode == .ESCAPE && state.tab_switcher_active {
+                    tab_switcher_finish(false)
+                }
+            case .VIRT_KEY_RELEASED:
+                if e.key.scancode == .LEFT_CTRL || e.key.scancode == .RIGHT_CTRL {
+                    if state.tab_switcher_active {
+                        tab_switcher_finish(true)
                     }
                 }
             }
 
             e = engine.iter_events()
+        }
+
+        // Keep the MRU list current for normal tab switches. While the switcher is driving
+        // selection we leave the order alone until it commits.
+        if !state.tab_switcher_active && state.active_tab_index >= 0 && state.active_tab_index < len(state.tabs) {
+            touch_tab_mru(state.active_tab_index)
         }
 
         if engine.should_render_frame() {
@@ -6903,11 +7532,13 @@ main :: proc() {
             draw_collection_move_dialog()
             draw_request_rename_dialog()
             draw_request_delete_dialog()
+            draw_tab_rename_dialog()
             draw_environment_create_dialog()
             draw_environment_rename_dialog()
             draw_environment_delete_dialog()
             draw_environment_move_dialog()
             draw_about_dialog()
+            draw_tab_switcher_overlay()
             engine.ui_end_build()
 
             engine.ui_draw(engine.get_projection())
@@ -7021,16 +7652,6 @@ curl_poll_thread :: proc() {
                             // TODO: handle results other than E_OK
                             log.debug("Request finished with unhandled non OK result. Result:", msg.data.result)
                         }
-
-                        // if global_q_obj != nil {
-                        //     dispatch_data := new(RequestCompletionUiDispatch)
-                        //     dispatch_data.request_id = req.id
-
-                        //     if !qt.qmetaobject_invoke_method(global_q_obj, dispatch_request_completion_to_ui, dispatch_data, .QueuedConnection) {
-                        //         free(dispatch_data)
-                        //         log.error("Failed to dispatch request completion to UI thread")
-                        //     }
-                        // }
 
                         req.curl_handle = nil
                         break

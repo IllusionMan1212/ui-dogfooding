@@ -26,8 +26,20 @@ Next on the list:-
     - Shortcuts in general need a good system
     - Need a way to isolate shortcuts for different components/UI
 
+- BUGS:
+    - [ ] Opening a tab causes the sidebar's scrollbar to be unresponsive to mouse dragging.
+    - [ ] Hovering over the sidebar tabs while having a collection/environment open causes the text size to leak to the open tab
+
+- Tab Switcher:-
+    - [ ] Need to limit the number of tabs shown in the tab switcher. 6 or 7
+    - [ ] Quickly pressing ctrl + tab should not open the tab switcher. It should only open if you hold ctrl and press tab. (like firefox)
+        - [ ] Tab switcher should be able to switch to the last tab when pressing ctrl + tab (like firefox)
+    - [ ] Hovering an item in the switcher, and then navigating with the keyboard has a bug where we quickly switch to the keyboard selected item, then the mouse hover item on the first navigation.
+
 Claude reviews:
 - [ ] Importer/Exporter feature set(?) Have claude review them and see if we're missing values when importing/exporting.
+
+- [ ] Importing and exporting doesn't show the toast message. We need to implement a fade animation for it.
 
 - Big Refactors:-
     - [x] Move away from fixed buffers for names and everything else.
