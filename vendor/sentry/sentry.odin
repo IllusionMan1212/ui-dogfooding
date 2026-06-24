@@ -1,5 +1,7 @@
 package sentry
 
+// Version 0.15.2
+
 when ODIN_OS == .Linux {
 foreign import sentry {
 	"lib/linux/libsentry.a",
