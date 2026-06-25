@@ -403,10 +403,10 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 					p := QueryParam{id = rand.int63()}
 					p.disabled = param.disabled
 					if key, ok := param.key.(string); ok {
-						p.key = strings.clone(key)
+						p.key = builder_from_string(key)
 					}
 					if value, ok := param.value.(string); ok {
-						p.value = strings.clone(value)
+						p.value = builder_from_string(value)
 					}
 
 					append(&request.query_params, p)
@@ -436,8 +436,8 @@ import_postman_collection :: proc(data: []byte, scratch_allocator: mem.Allocator
 
 			for header in req.headers {
 				h := RequestHeader{id = rand.int63()}
-				h.key = strings.clone(header.key)
-				h.value = strings.clone(header.value)
+				h.key = builder_from_string(header.key)
+				h.value = builder_from_string(header.value)
 				h.disabled = header.disabled
 				append(&request.headers, h)
 			}
@@ -711,8 +711,8 @@ import_insomnia_v4_collection :: proc(data: []byte, scratch_allocator: mem.Alloc
 
 		for param in request.parameters {
 			p := QueryParam{id = rand.int63()}
-			p.key = strings.clone(param.name)
-			p.value = strings.clone(param.value)
+			p.key = builder_from_string(param.name)
+			p.value = builder_from_string(param.value)
 
 			append(&req.query_params, p)
 		}
@@ -733,8 +733,8 @@ import_insomnia_v4_collection :: proc(data: []byte, scratch_allocator: mem.Alloc
 
 		for header in request.headers {
 			h := RequestHeader{id = rand.int63()}
-			h.key = strings.clone(header.name)
-			h.value = strings.clone(header.value)
+			h.key = builder_from_string(header.name)
+			h.value = builder_from_string(header.value)
 			append(&req.headers, h)
 		}
 
@@ -949,10 +949,10 @@ import_hoppscotch_v11_collections :: proc(data: []byte, scratch_allocator: mem.A
 				for query in queries {
 					p := QueryParam{id = rand.int63()}
 					key_value := strings.split_n(query, "=", 2, allocator = scratch_allocator)
-					p.key = strings.clone(key_value[0])
+					p.key = builder_from_string(key_value[0])
 
 					if len(key_value) > 1 {
-						p.value = strings.clone(key_value[1])
+						p.value = builder_from_string(key_value[1])
 					}
 
 					append(&request.query_params, p)
@@ -962,9 +962,10 @@ import_hoppscotch_v11_collections :: proc(data: []byte, scratch_allocator: mem.A
 			outer:
 			for param in hoppscotch_request.query {
 				for &existing_param in request.query_params {
-					if existing_param.key == param.key {
+					if strings.to_string(existing_param.key) == param.key {
 						log.warnf("Found a duplicate query param \"%s\". Updating value", param.key)
-						existing_param.value = strings.clone(param.value)
+						strings.builder_reset(&existing_param.value)
+						strings.write_string(&existing_param.value, param.value)
 
 						continue outer
 					}
@@ -972,16 +973,16 @@ import_hoppscotch_v11_collections :: proc(data: []byte, scratch_allocator: mem.A
 
 				p := QueryParam{id = rand.int63()}
 				p.disabled = !param.active
-				p.key = strings.clone(param.key)
-				p.value = strings.clone(param.value)
+				p.key = builder_from_string(param.key)
+				p.value = builder_from_string(param.value)
 
 				append(&request.query_params, p)
 			}
 
 			for header in hoppscotch_request.headers {
 				h := RequestHeader{id = rand.int63()}
-				h.key = strings.clone(header.key)
-				h.value = strings.clone(header.value)
+				h.key = builder_from_string(header.key)
+				h.value = builder_from_string(header.value)
 				h.disabled = !header.active
 				append(&request.headers, h)
 			}

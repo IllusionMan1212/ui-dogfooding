@@ -32,7 +32,7 @@ Next on the list:-
 
 - Tab Switcher:-
     - [ ] Need to limit the number of tabs shown in the tab switcher. 6 or 7
-    - [ ] Quickly pressing ctrl + tab should not open the tab switcher. It should only open if you hold ctrl and press tab. (like firefox)
+    - [ ] Quickly pressing ctrl + tab should not open the tab switcher. It should only open if you hold ctrl and press tab. (like firefox). 150ms delay
         - [ ] Tab switcher should be able to switch to the last tab when pressing ctrl + tab (like firefox)
     - [ ] Hovering an item in the switcher, and then navigating with the keyboard has a bug where we quickly switch to the keyboard selected item, then the mouse hover item on the first navigation.
 
@@ -48,7 +48,7 @@ Claude reviews:
 - UI:
     - [ ] We have to assert or something when the stack pushes and pops don't match up. A lot of times I forget to pop something or push something too many times and styles leak.
     - [x] Empty state for collections/environment sidebar
-    - [ ] Migrate everything to use string builder with input limitations
+    - [x] Migrate everything to use string builder with input limitations
 
 - [x] Dialog
     - [ ] Text drawn in dialogs gets drawn at the default size on the first frame, then the correct size on the second+ frames.
@@ -78,6 +78,9 @@ Claude reviews:
 
 Misc:
 - [ ] We should probably somehow generate the whole ui_push_* ui_pop_* ui_set_next_* procedures as well as their nodes.
+
+Far Future Maybes:-
+- [ ] Internationalization support. Can use Odin's text/i18n library.
 
 Optimizations:-
 - [x] Only rendering frames when something has visually changed

@@ -191,11 +191,11 @@ RequestBody :: struct {
     binary_path: string,
 }
 
-#assert(size_of(RequestHeader) == 48)
+#assert(size_of(RequestHeader) == 96)
 RequestHeader :: struct {
     id: i64,
-    key: string,
-    value: string,
+    key: strings.Builder,
+    value: strings.Builder,
     disabled: bool,
 }
 
@@ -226,11 +226,11 @@ RequestResponseTab :: enum {
     Headers,
 }
 
-#assert(size_of(QueryParam) == 48)
+#assert(size_of(QueryParam) == 96)
 QueryParam :: struct {
     id: i64,
-    key: string,
-    value: string,
+    key: strings.Builder,
+    value: strings.Builder,
     disabled: bool,
 }
 
@@ -3593,6 +3593,233 @@ draw_url_text_input :: proc(req: ^Request) {
     }
 }
 
+// A single editable row in a key/value table. `key`/`value` point into the
+// caller's backing storage so edits land directly on the model.
+KvRow :: struct {
+    id:       i64,
+    key:      ^strings.Builder,
+    value:    ^strings.Builder,
+    disabled: bool,
+}
+
+// Actions produced by draw_kv_table for one frame. The table never mutates the
+// row set itself (so the slice stays valid during the draw); the caller applies
+// these afterwards. toggled_row/removed_row are -1 when nothing happened.
+KvTableResult :: struct {
+    edited:      bool,
+    toggled_row: int,
+    removed_row: int,
+}
+
+// 20x20 checkbox-style indicator (no interaction; the surrounding cell handles
+// clicks). Mirrors the indicator drawn by draw_checkbox.
+draw_check_indicator :: proc(checked: bool) {
+    engine.ui_set_next_background_color(engine.color_hex_rgb(checked ? THEME_BACKGROUND_BRAND_DEFAULT[state.config.theme] : THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme]))
+    engine.ui_set_next_width(engine.ui_px(20, 1))
+    engine.ui_set_next_height(engine.ui_px(20, 1))
+    engine.ui_set_next_border_thickness(0.5)
+    engine.ui_set_next_border_color(engine.color_hex_rgb(checked ? THEME_BORDER_BRAND_DEFAULT : THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_SM)
+    engine.ui_set_next_align_x(.Center)
+    engine.ui_set_next_align_y(.Center)
+    engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
+    engine.ui_row(); {
+        if checked {
+            engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_ICON_BRAND_DEFAULT[state.config.theme]))
+            engine.ui_text(ICONS[.Check])
+        }
+    }
+}
+
+// Transparent, borderless text input that fills a table cell. Shows a brand
+// focus ring and dims its text when the row is disabled. Returns whether the
+// content changed this frame. `id_str` must be unique per cell.
+draw_kv_cell_input :: proc(id_str: string, builder: ^strings.Builder, placeholder: string, dim: bool, cell_bg: engine.Color) -> (changed: bool) {
+    id := engine.ui_make_id(id_str)
+
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_fill())
+    engine.ui_set_next_background_color(cell_bg)
+    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_BRAND_DEFAULT))
+    engine.ui_set_next_border_thickness(0)
+    engine.ui_set_next_flags({.DrawBackground, .DrawBorder, .MouseClickable, .ClipToBounds})
+    cell := engine.ui_row(id); {
+        engine.ui_padding(12, {.Left, .Right})
+        engine.ui_padding(10, {.Top, .Bottom})
+
+        cell_sig := engine.ui_signal_from_box(cell)
+        if engine.ui_clicked(cell_sig) {
+            engine.ui_focus_text_input(id)
+        }
+        if engine.ui_hovering(cell_sig) {
+            engine.set_cursor(.IBEAM)
+        }
+
+        text_color := engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme])
+        if dim {
+            text_color.a = 0.5
+        }
+
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_fill())
+        engine.ui_set_next_align_y(.Center)
+        engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
+        engine.ui_set_next_text_color(text_color)
+        res := engine.ui_text_input(id, builder, engine.TextInputOptions{placeholder = placeholder})
+
+        if res.boxes.caret != nil {
+            res.boxes.caret.background_color = engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme])
+        }
+        if res.boxes.placeholder != nil {
+            res.boxes.placeholder.text_color = engine.color_hex_rgb(THEME_TEXT_PRIMARY_DISABLED[state.config.theme])
+        }
+        if res.boxes.selection != nil {
+            res.boxes.selection.background_color = engine.color_hex_rgb(THEME_SELECTION_DEFAULT[state.config.theme])
+        }
+        if res.focused {
+            cell.border_thickness = 1.5
+        }
+
+        changed = res.changed
+    }
+    return
+}
+
+// Generic key/value table used by the query parameters and headers tabs (and
+// later environment variables / form fields). Each row is a toggle checkbox, an
+// editable key, an editable value, and a remove button. Styling follows the
+// moonladder QML tables: 40px rows separated by single 1px borders.
+draw_kv_table :: proc(id_prefix: string, rows: []KvRow) -> (result: KvTableResult) {
+    ROW_H :: 40
+    SIDE_W :: 40
+
+    result.toggled_row = -1
+    result.removed_row = -1
+
+    cell_bg := engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_ALT[state.config.theme])
+
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_children_sum(1))
+    engine.ui_set_next_border_thickness(1)
+    engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+    engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_SM)
+    engine.ui_set_next_flags({.DrawBorder, .ClipToBounds})
+    engine.ui_column(engine.ui_make_id(id_prefix)); {
+        for row, i in rows {
+            if i > 0 {
+                BORDER_H()
+            }
+
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_px(ROW_H, 1))
+            engine.ui_row(engine.ui_make_id(fmt.tprintf("%s_row_%d", id_prefix, row.id))); {
+                { // Toggle cell
+                    engine.ui_set_next_width(engine.ui_px(SIDE_W, 1))
+                    engine.ui_set_next_height(engine.ui_fill())
+                    engine.ui_set_next_align_x(.Center)
+                    engine.ui_set_next_align_y(.Center)
+                    engine.ui_set_next_background_color(cell_bg)
+                    engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+                    cb := engine.ui_row(engine.ui_make_id(fmt.tprintf("%s_cb_%d", id_prefix, row.id))); {
+                        cb_sig := engine.ui_signal_from_box(cb)
+                        if engine.ui_hovering(cb_sig) {
+                            engine.set_cursor(.HAND)
+                            cb.background_color = engine.color_hex_rgb(THEME_BACKGROUND_PRIMARY_DEFAULT_HOVER[state.config.theme])
+                        }
+                        draw_check_indicator(!row.disabled)
+                        if engine.ui_clicked(cb_sig) {
+                            result.toggled_row = i
+                        }
+                    }
+                }
+
+                BORDER_V()
+
+                if draw_kv_cell_input(fmt.tprintf("%s_key_%d", id_prefix, row.id), row.key, "Key", row.disabled, cell_bg) {
+                    result.edited = true
+                }
+
+                BORDER_V()
+
+                if draw_kv_cell_input(fmt.tprintf("%s_value_%d", id_prefix, row.id), row.value, "Value", row.disabled, cell_bg) {
+                    result.edited = true
+                }
+
+                BORDER_V()
+
+                { // Remove cell
+                    engine.ui_set_next_width(engine.ui_px(SIDE_W, 1))
+                    engine.ui_set_next_height(engine.ui_fill())
+                    engine.ui_set_next_align_x(.Center)
+                    engine.ui_set_next_align_y(.Center)
+                    engine.ui_set_next_background_color(cell_bg)
+                    engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+                    del := engine.ui_row(engine.ui_make_id(fmt.tprintf("%s_del_%d", id_prefix, row.id))); {
+                        del_sig := engine.ui_signal_from_box(del)
+                        hovering := engine.ui_hovering(del_sig)
+                        if hovering {
+                            engine.set_cursor(.HAND)
+                            del.background_color = engine.color_hex_rgb(THEME_BACKGROUND_ERROR_DEFAULT[state.config.theme])
+                        }
+                        engine.ui_set_next_text_color(engine.color_hex_rgb(hovering ? THEME_ICON_ERROR_DEFAULT[state.config.theme] : THEME_ICON_TERTIARY_DEFAULT[state.config.theme]))
+                        engine.ui_text_sized(ICONS[.Close], THEME_FONT_SIZE_BODY_MD)
+                        if engine.ui_clicked(del_sig) {
+                            result.removed_row = i
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return
+}
+
+add_query_param :: proc(req: ^Request) {
+    p := QueryParam{id = rand.int63()}
+    p.key = strings.builder_make()
+    p.value = strings.builder_make()
+    append(&req.query_params, p)
+    update_url_from_query_params(req)
+    modify_request(req)
+}
+
+remove_query_param :: proc(req: ^Request, index: int) {
+    param := &req.query_params[index]
+    strings.builder_destroy(&param.key)
+    strings.builder_destroy(&param.value)
+    ordered_remove(&req.query_params, index)
+    update_url_from_query_params(req)
+    modify_request(req)
+}
+
+toggle_query_param :: proc(req: ^Request, index: int) {
+    req.query_params[index].disabled = !req.query_params[index].disabled
+    update_url_from_query_params(req)
+    modify_request(req)
+}
+
+add_header :: proc(req: ^Request) {
+    h := RequestHeader{id = rand.int63()}
+    h.key = strings.builder_make()
+    h.value = strings.builder_make()
+    append(&req.headers, h)
+    modify_request(req)
+}
+
+remove_header :: proc(req: ^Request, index: int) {
+    header := &req.headers[index]
+    strings.builder_destroy(&header.key)
+    strings.builder_destroy(&header.value)
+    ordered_remove(&req.headers, index)
+    modify_request(req)
+}
+
+toggle_header :: proc(req: ^Request, index: int) {
+    req.headers[index].disabled = !req.headers[index].disabled
+    modify_request(req)
+}
+
 draw_request_parameters_tab :: proc(req: ^Request) {
     engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
     engine.ui_text_sized("Query Parameters", THEME_FONT_SIZE_BODY_SM)
@@ -3600,12 +3827,29 @@ draw_request_parameters_tab :: proc(req: ^Request) {
     draw_checkbox(&req.query_params_bulk_edit, "Bulk edit###query_params")
     if req.query_params_bulk_edit {
         // TODO: if bulk edit, show textarea with key=value pairs
-    } else {
-        // TODO: query params table
+    } else if len(req.query_params) > 0 {
+        engine.ui_spacer(engine.ui_px(10, 1))
+
+        rows := make([]KvRow, len(req.query_params), context.temp_allocator)
+        for &param, i in req.query_params {
+            rows[i] = {id = param.id, key = &param.key, value = &param.value, disabled = param.disabled}
+        }
+
+        result := draw_kv_table(fmt.tprintf("query_params_%d", req.id), rows)
+        if result.edited {
+            update_url_from_query_params(req)
+            modify_request(req)
+        }
+        if result.toggled_row >= 0 {
+            toggle_query_param(req, result.toggled_row)
+        }
+        if result.removed_row >= 0 {
+            remove_query_param(req, result.removed_row)
+        }
     }
     engine.ui_spacer(engine.ui_px(10, 1))
     if draw_button("Add New", .LinkColored, .Small, left_icon = .Plus) {
-        // TODO:
+        add_query_param(req)
     }
 
     if len(req.path_params) > 0 {
@@ -3666,11 +3910,30 @@ draw_request_headers_tab :: proc(req: ^Request) {
     engine.ui_text_sized("Headers", THEME_FONT_SIZE_BODY_SM)
     engine.ui_spacer(engine.ui_px(10, 1))
     draw_checkbox(&req.headers_bulk_edit, "Bulk edit###headers")
-    // TODO: query params table
-    // TODO: if bulk edit, show textarea with key=value pairs
+    if req.headers_bulk_edit {
+        // TODO: if bulk edit, show textarea with key=value pairs
+    } else if len(req.headers) > 0 {
+        engine.ui_spacer(engine.ui_px(10, 1))
+
+        rows := make([]KvRow, len(req.headers), context.temp_allocator)
+        for &header, i in req.headers {
+            rows[i] = {id = header.id, key = &header.key, value = &header.value, disabled = header.disabled}
+        }
+
+        result := draw_kv_table(fmt.tprintf("headers_%d", req.id), rows)
+        if result.edited {
+            modify_request(req)
+        }
+        if result.toggled_row >= 0 {
+            toggle_header(req, result.toggled_row)
+        }
+        if result.removed_row >= 0 {
+            remove_header(req, result.removed_row)
+        }
+    }
     engine.ui_spacer(engine.ui_px(10, 1))
     if draw_button("Add New", .LinkColored, .Small, left_icon = .Plus) {
-        // TODO:
+        add_header(req)
     }
 }
 
@@ -4330,6 +4593,14 @@ destroy_authorization :: proc(auth: ^Authorization) {
 
 // Assumes dst is initialized/valid but we want to overwrite its data with src data
 // It clears dst data before copying
+// Builds a strings.Builder owning a copy of `s`. Used when constructing
+// QueryParam/RequestHeader rows from loaded/imported string data.
+builder_from_string :: proc(s: string) -> strings.Builder {
+    b := strings.builder_make_len_cap(0, len(s))
+    strings.write_string(&b, s)
+    return b
+}
+
 copy_request_data :: proc(dst: ^Request, src: ^Request) {
     delete(dst.name)
     dst.name = strings.clone(src.name)
@@ -4337,28 +4608,28 @@ copy_request_data :: proc(dst: ^Request, src: ^Request) {
     strings.builder_reset(&dst.url)
     strings.write_string(&dst.url, strings.to_string(src.url))
 
-    for param in dst.query_params {
-        delete(param.key)
-        delete(param.value)
+    for &param in dst.query_params {
+        strings.builder_destroy(&param.key)
+        strings.builder_destroy(&param.value)
     }
     delete(dst.query_params)
     dst.query_params = make([dynamic]QueryParam, len(src.query_params))
-    for param, i in src.query_params {
+    for &param, i in src.query_params {
         dst.query_params[i] = param
-        dst.query_params[i].key = strings.clone(param.key)
-        dst.query_params[i].value = strings.clone(param.value)
+        dst.query_params[i].key = builder_from_string(strings.to_string(param.key))
+        dst.query_params[i].value = builder_from_string(strings.to_string(param.value))
     }
 
-    for header in dst.headers {
-        delete(header.key)
-        delete(header.value)
+    for &header in dst.headers {
+        strings.builder_destroy(&header.key)
+        strings.builder_destroy(&header.value)
     }
     delete(dst.headers)
     dst.headers = make([dynamic]RequestHeader, len(src.headers))
-    for header, i in src.headers {
+    for &header, i in src.headers {
         dst.headers[i] = header
-        dst.headers[i].key = strings.clone(header.key)
-        dst.headers[i].value = strings.clone(header.value)
+        dst.headers[i].key = builder_from_string(strings.to_string(header.key))
+        dst.headers[i].value = builder_from_string(strings.to_string(header.value))
     }
 
     for key, param in dst.path_params {
@@ -4437,14 +4708,14 @@ destroy_request :: proc(request: ^Request) {
     delete(request.body.structured)
     delete(request.body.binary_path)
 
-    for param in request.query_params {
-        delete(param.key)
-        delete(param.value)
+    for &param in request.query_params {
+        strings.builder_destroy(&param.key)
+        strings.builder_destroy(&param.value)
     }
     delete(request.query_params)
-    for header in request.headers {
-        delete(header.key)
-        delete(header.value)
+    for &header in request.headers {
+        strings.builder_destroy(&header.key)
+        strings.builder_destroy(&header.value)
     }
     delete(request.headers)
     for header in request.response.headers {
@@ -4547,7 +4818,7 @@ update_url_from_query_params :: proc(request: ^Request) {
     }
     should_write_ampersand := false
     for &param in request.query_params {
-        key := param.key
+        key := strings.to_string(param.key)
         if param.disabled || key == "" {
             continue
         }
@@ -4558,7 +4829,7 @@ update_url_from_query_params :: proc(request: ^Request) {
         should_write_ampersand = true
 
         strings.write_string(&merged_url, key)
-        val := param.value
+        val := strings.to_string(param.value)
         if val != "" {
             strings.write_byte(&merged_url, '=')
             strings.write_string(&merged_url, val)
@@ -4685,14 +4956,42 @@ request_marshaller :: proc(w: io.Writer, v: any, opt: ^json.Marshal_Options) -> 
                 io.write_quoted_string(w, str) or_return
             case [dynamic]RequestHeader:
                 headers := ((cast(^[dynamic]RequestHeader)(data))^)
-                opt: json.Marshal_Options
 
-                json.marshal_to_writer(w, headers, &opt) or_return
+                io.write_byte(w, '[') or_return
+                for &header, hi in headers {
+                    if hi != 0 {
+                        io.write_byte(w, ',') or_return
+                    }
+                    io.write_string(w, `{"id":`) or_return
+                    io.write_i64(w, header.id) or_return
+                    io.write_string(w, `,"key":`) or_return
+                    io.write_quoted_string(w, strings.to_string(header.key)) or_return
+                    io.write_string(w, `,"value":`) or_return
+                    io.write_quoted_string(w, strings.to_string(header.value)) or_return
+                    io.write_string(w, `,"disabled":`) or_return
+                    io.write_string(w, header.disabled ? "true" : "false") or_return
+                    io.write_byte(w, '}') or_return
+                }
+                io.write_byte(w, ']') or_return
             case [dynamic]QueryParam:
                 params := ((cast(^[dynamic]QueryParam)(data))^)
-                opt: json.Marshal_Options
 
-                json.marshal_to_writer(w, params, &opt) or_return
+                io.write_byte(w, '[') or_return
+                for &param, pi in params {
+                    if pi != 0 {
+                        io.write_byte(w, ',') or_return
+                    }
+                    io.write_string(w, `{"id":`) or_return
+                    io.write_i64(w, param.id) or_return
+                    io.write_string(w, `,"key":`) or_return
+                    io.write_quoted_string(w, strings.to_string(param.key)) or_return
+                    io.write_string(w, `,"value":`) or_return
+                    io.write_quoted_string(w, strings.to_string(param.value)) or_return
+                    io.write_string(w, `,"disabled":`) or_return
+                    io.write_string(w, param.disabled ? "true" : "false") or_return
+                    io.write_byte(w, '}') or_return
+                }
+                io.write_byte(w, ']') or_return
             case map[string]PathParam:
                 params := ((cast(^map[string]PathParam)(data))^)
                 opt: json.Marshal_Options
@@ -5378,8 +5677,8 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
                 if disabled_ok {
                     h.disabled = header_disabled.(json.Boolean)
                 }
-                h.key = strings.clone(header_name[:])
-                h.value = strings.clone(header_value[:])
+                h.key = builder_from_string(header_name[:])
+                h.value = builder_from_string(header_value[:])
                 append(&request.headers, h)
             }
         }
@@ -5431,8 +5730,8 @@ get_collection :: proc(val: json.Object) -> (collection: ^Collection, err: json.
                 p := QueryParam{}
                 p.id = param_id
                 p.disabled = param_disabled
-                p.key = strings.clone(param_name)
-                p.value = strings.clone(param_value)
+                p.key = builder_from_string(param_name)
+                p.value = builder_from_string(param_value)
                 append(&request.query_params, p)
             }
         }
@@ -6112,8 +6411,8 @@ build_final_request_url :: proc(request: ^Request, effective_auth: Authorization
     }
 
     for &query in request.query_params {
-        key := query.key
-        value := query.value
+        key := strings.to_string(query.key)
+        value := strings.to_string(query.value)
 
         resolved_key, key_changed := resolve_environment_variables(key, allocator)
         defer if key_changed {
@@ -6286,8 +6585,8 @@ send_request :: proc(request: ^Request) {
             continue
         }
 
-        key := header.key
-        value := header.value
+        key := strings.to_string(header.key)
+        value := strings.to_string(header.value)
 
         resolved_key, key_changed := resolve_environment_variables(key)
         defer if key_changed {
@@ -6710,16 +7009,16 @@ new_request_tab :: proc() {
     // NOTE: some sites return a 403 if we don't send a user-agent. Should probably also look into
     // adding some other default headers (check postman and hoppscotch)
     user_agent := RequestHeader{id = rand.int63()}
-    user_agent.key = strings.clone("User-Agent")
+    user_agent.key = builder_from_string("User-Agent")
     when RELEASE_BUILD {
-        user_agent.value = strings.clone("moonladder" + "/" + VERSION)
+        user_agent.value = builder_from_string("moonladder" + "/" + VERSION)
     } else {
-        user_agent.value = strings.clone("moonladder" + "/" + "debug")
+        user_agent.value = builder_from_string("moonladder" + "/" + "debug")
     }
 
     accept := RequestHeader{id = rand.int63()}
-    accept.key = strings.clone("Accept")
-    accept.value = strings.clone("*/*")
+    accept.key = builder_from_string("Accept")
+    accept.value = builder_from_string("*/*")
 
     append(&req.headers, user_agent)
     append(&req.headers, accept)
@@ -7621,15 +7920,15 @@ hash_request :: proc(request: ^Request) -> u128 {
     xxhash.XXH3_128_update(state.hasher, {cast(u8)request.method})
     xxhash.XXH3_128_update(state.hasher, transmute([]u8)strings.to_string(request.url)[:])
     for &param in request.query_params {
-        xxhash.XXH3_128_update(state.hasher, transmute([]u8)param.key)
+        xxhash.XXH3_128_update(state.hasher, transmute([]u8)strings.to_string(param.key))
         xxhash.XXH3_128_update(state.hasher, {cast(u8)param.disabled})
-        xxhash.XXH3_128_update(state.hasher, transmute([]u8)param.value)
+        xxhash.XXH3_128_update(state.hasher, transmute([]u8)strings.to_string(param.value))
     }
 
     for &header in request.headers {
-        xxhash.XXH3_128_update(state.hasher, transmute([]u8)header.key)
+        xxhash.XXH3_128_update(state.hasher, transmute([]u8)strings.to_string(header.key))
         xxhash.XXH3_128_update(state.hasher, {cast(u8)header.disabled})
-        xxhash.XXH3_128_update(state.hasher, transmute([]u8)header.value)
+        xxhash.XXH3_128_update(state.hasher, transmute([]u8)strings.to_string(header.value))
     }
 
     for key, &value in request.path_params {

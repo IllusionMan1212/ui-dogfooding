@@ -154,8 +154,8 @@ export_collection_to_postman_v21 :: proc(collection: ^Collection, scratch_alloca
 		postman_req.method = http_method_string(req.method)
 
 		for &header in req.headers {
-			key := header.key
-			value := header.value
+			key := strings.to_string(header.key)
+			value := strings.to_string(header.value)
 			if key == "" && value == "" {
 				continue
 			}
@@ -230,8 +230,8 @@ export_collection_to_postman_v21 :: proc(collection: ^Collection, scratch_alloca
 		url.path = path
 
 		for &param in req.query_params {
-			key := param.key
-			value := param.value
+			key := strings.to_string(param.key)
+			value := strings.to_string(param.value)
 			if key == "" {
 				continue
 			}
