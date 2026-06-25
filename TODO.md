@@ -56,6 +56,9 @@ Claude reviews:
 - Text renderer
     - [ ] Anti-aliasing on the equals glyph is really bad.
 
+- Font system
+    - [x] Need a way to select different (registered) fonts at runtime for different text. I need this for monospace fonts.
+
 - [x] Text input
     - [x] When moving the mouse, sometimes the blinking of the caret takes longer (This is something to do with how we handle events I bet)
     - [-] When window loses focus we should unfocus the text input (or at the very least stop wasting cpu blinking the caret)

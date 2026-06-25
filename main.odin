@@ -1,5 +1,6 @@
 package main
 
+import "core:time"
 import "core:hash"
 import "base:runtime"
 import "core:fmt"
@@ -74,6 +75,7 @@ ENVIRONMENT_SELECTOR_ID :: #hash("environment_selector", "fnv32a")
 TAB_RENAME_DIALOG_ID :: #hash("rename_tab_dialog", "fnv32a")
 TAB_RENAME_NAME_INPUT_ID :: #hash("rename_tab_name_input", "fnv32a")
 SETTINGS_DIALOG_ID :: #hash("settings_dialog", "fnv32a")
+CURL_COMMAND_DIALOG_ID :: #hash("curl_command_dialog", "fnv32a")
 ABOUT_DIALOG_ID :: #hash("about_dialog", "fnv32a")
 
 when RELEASE_BUILD {
@@ -418,6 +420,26 @@ ServerInstance :: struct {
     user_email: string `json:"user_email"`,
 }
 
+// Just a type alias — nothing fancy needed
+Timers :: map[string]time.Time
+
+// Check if a timer is still active (also cleans up expired ones)
+// TODO: doesn't actually update the UI because of our "only submit a frame when needed" approach
+timer_active :: proc(id: string, duration: time.Duration) -> bool {
+    clicked_at, ok := state.timers[id]
+    if !ok do return false
+    if time.since(clicked_at) >= duration {
+        delete_key(&state.timers, id)
+        return false
+    }
+    return true
+}
+
+// Start (or restart) a timer
+timer_start :: proc(id: string) {
+    state.timers[id] = time.now()
+}
+
 Config :: struct {
     version: int `json:"cfg_version"`,
     instances: [dynamic]ServerInstance `json:"instances"`,
@@ -442,6 +464,7 @@ State :: struct {
     curl_multi_handle: ^curl.CURLM,
 
     // UI
+    monospace_font: engine.FontHandle,
     active_tab_index: int,
     action_menu_workspace_id: i64,
     about_selected_third_party: ThirdParty,
@@ -451,6 +474,7 @@ State :: struct {
     ui_debug_overlay_drag_offset: [2]f32,
     ui_debug_overlay_drag_start_mouse: [2]f32,
     ui_debug_overlay_drag_start_pos: [2]f32,
+    timers: Timers,
 
     timeout_builder: strings.Builder,
 
@@ -497,6 +521,9 @@ State :: struct {
     // Set on frames where the cursor actually moved. Hover only re-asserts the selection on such
     // frames, so a stationary cursor sitting over an item never fights keyboard/arrow navigation.
     tab_switcher_mouse_moved: bool,
+
+    // cURL dialog properties
+    curl_command: string,
 }
 
 logger: log.Logger
@@ -1681,6 +1708,46 @@ draw_environment_move_dialog :: proc() {
     })
 }
 
+draw_curl_command_dialog :: proc() {
+    draw_dialog(CURL_COMMAND_DIALOG_ID, 680, draw_content = proc() {
+        engine.ui_set_next_font_weight(600)
+        engine.ui_text_sized("cURL Command", THEME_FONT_SIZE_BODY_MD)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+        { // Command area
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_px(240, 1))
+            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+            engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+            engine.ui_set_next_border_thickness(0.5)
+            engine.ui_set_next_flags({.DrawBackground, .DrawBorder, .ScrollableY})
+            engine.ui_column(); {
+                engine.ui_padding(12, {.Left, .Right, .Top, .Bottom})
+
+                engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
+                engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                // TODO: This text should be highlightable and selectable (i.e. This is basically a read-only multi-line text input)
+                engine.ui_set_next_font(state.monospace_font)
+                engine.ui_text_wrapped(state.curl_command)
+            }
+        }
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+        { // Actions
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_row(); {
+                engine.ui_spacer(engine.ui_fill())
+                if draw_button(timer_active("curl_copy", 2 * time.Second) ? "Copied!" : "Copy", left_icon = .Copy) {
+                    // TODO: copy the command
+                    timer_start("curl_copy")
+                }
+            }
+        }
+    })
+}
+
 draw_about_dialog :: proc() {
     draw_dialog(ABOUT_DIALOG_ID, 520, y = 96, draw_content = proc() {
         engine.ui_text_sized("Moonladder", THEME_FONT_SIZE_BODY_LG)
@@ -1702,6 +1769,7 @@ draw_about_dialog :: proc() {
                 engine.ui_text_sized("Version", THEME_FONT_SIZE_BODY_SM)
                 version_text_width := engine.ui_text_measure_string("Version", THEME_FONT_SIZE_BODY_SM).x
                 engine.ui_spacer(engine.ui_px(72 - version_text_width, 1))
+                engine.ui_set_next_font(state.monospace_font)
                 engine.ui_text_sized(VERSION when RELEASE_BUILD else "debug", THEME_FONT_SIZE_BODY_SM)
             }
         }
@@ -1715,6 +1783,7 @@ draw_about_dialog :: proc() {
                 engine.ui_text_sized("Git SHA", THEME_FONT_SIZE_BODY_SM)
                 git_sha_text_width := engine.ui_text_measure_string("Git SHA", THEME_FONT_SIZE_BODY_SM).x
                 engine.ui_spacer(engine.ui_px(72 - git_sha_text_width, 1))
+                engine.ui_set_next_font(state.monospace_font)
                 engine.ui_text_sized(GIT_SHA, THEME_FONT_SIZE_BODY_SM)
             }
         }
@@ -3638,7 +3707,11 @@ draw_request_main_area :: proc(req: ^Request) {
                                 }
                                 engine.ui_spacer(engine.ui_px(THEME_SPACING_SM, 1))
                                 if draw_icon_button(.Code, icon_size = 24, variant = .SecondaryGrey, size = .Small, tooltip_text = "Show cURL command") {
-                                    // TODO: show curl code dialog
+                                    curl_command := build_request_curl_command(req)
+                                    delete(state.curl_command)
+                                    state.curl_command = curl_command
+
+                                    engine.ui_dialog_open(CURL_COMMAND_DIALOG_ID)
                                 }
                             }
                         }
@@ -5658,6 +5731,291 @@ lookup_environment_variable_value :: proc(key: string) -> (string, bool) {
     return "", false
 }
 
+curl_shell_quote :: proc(raw: string, allocator := context.allocator) -> string {
+    sb := strings.builder_make_len_cap(0, len(raw) + 2, allocator)
+
+    strings.write_byte(&sb, '\'')
+    for ch in raw {
+        if ch == '\'' {
+            strings.write_string(&sb, "'\"'\"'")
+            continue
+        }
+
+        strings.write_byte(&sb, cast(u8)ch)
+    }
+    strings.write_byte(&sb, '\'')
+
+    return strings.to_string(sb)
+}
+
+append_curl_option :: proc(sb: ^strings.Builder, option: string, value: string) {
+    strings.write_byte(sb, ' ')
+    strings.write_string(sb, option)
+    strings.write_byte(sb, ' ')
+
+    quoted := curl_shell_quote(value)
+    defer delete(quoted)
+    strings.write_string(sb, quoted)
+}
+
+build_request_curl_command :: proc(request: ^Request, allocator := context.allocator) -> string {
+    effective_auth := resolve_auth_environment_variables(trimmed_auth(resolve_request_auth(request)))
+    effective_api_key_key := strings.trim_space(effective_auth.api_key_key)
+    effective_api_key_key_lower := strings.to_lower(effective_api_key_key, allocator)
+    defer delete(effective_api_key_key_lower)
+
+    final_url := build_final_request_url(request, effective_auth, allocator)
+    defer delete(final_url)
+
+    command := strings.builder_make_len_cap(0, 512, allocator)
+    strings.write_string(&command, "curl")
+
+    if state.config.follow_redirects {
+        strings.write_string(&command, " --location")
+    }
+
+    if state.config.timeout_ms > 0 {
+        timeout_value := fmt.aprintf("%d.%03d", state.config.timeout_ms / 1000, state.config.timeout_ms % 1000)
+        defer delete(timeout_value)
+        append_curl_option(&command, "--max-time", timeout_value)
+    }
+
+    append_curl_option(&command, "--request", http_method_string(request.method))
+
+    for &header in request.headers {
+        if header.disabled {
+            continue
+        }
+
+        key := header.key
+        value := header.value
+
+        resolved_key, key_changed := resolve_environment_variables(key, allocator)
+        defer if key_changed {
+            delete(resolved_key)
+        }
+        if key_changed {
+            key = resolved_key
+        }
+
+        key = strings.trim_space(key)
+        if key == "" {
+            continue
+        }
+
+        resolved_value, value_changed := resolve_environment_variables(value, allocator)
+        defer if value_changed {
+            delete(resolved_value)
+        }
+        if value_changed {
+            value = resolved_value
+        }
+
+        key_lower := strings.to_lower(key, allocator)
+        defer delete(key_lower)
+        if key_lower == "content-type" && request.body.type != .None {
+            continue
+        }
+        if key_lower == "authorization" && effective_auth.type != .InheritFromParent && effective_auth.type != .ApiKey && effective_auth.type != .NoAuth {
+            continue
+        }
+        if effective_auth.type == .ApiKey && effective_auth.api_key_add_to == .Header && key_lower == effective_api_key_key_lower {
+            continue
+        }
+
+        header_option := fmt.aprintf("%s: %s", key, value)
+        defer delete(header_option)
+        append_curl_option(&command, "--header", header_option)
+    }
+
+    switch effective_auth.type {
+    case .InheritFromParent:
+    case .NoAuth:
+    case .Basic:
+        username := effective_auth.basic_username
+        password := effective_auth.basic_password
+        if username != "" || password != "" {
+            credentials := fmt.aprintf("%s:%s", username, password)
+            defer delete(credentials)
+            encoded := base64.encode(transmute([]u8)credentials)
+            defer delete(encoded)
+            auth_header := fmt.aprintf("Authorization: Basic %s", encoded)
+            defer delete(auth_header)
+            append_curl_option(&command, "--header", auth_header)
+        }
+    case .Token:
+        token := effective_auth.bearer_token
+        if token != "" {
+            prefix := effective_auth.bearer_prefix
+            if prefix == "" {
+                prefix = "Bearer"
+            }
+            auth_header := fmt.aprintf("Authorization: %s %s", prefix, token)
+            defer delete(auth_header)
+            append_curl_option(&command, "--header", auth_header)
+        }
+    case .ApiKey:
+        api_value := effective_auth.api_key_value
+        if effective_api_key_key != "" && effective_auth.api_key_add_to == .Header {
+            api_header := fmt.aprintf("%s: %s", effective_api_key_key, api_value)
+            defer delete(api_header)
+            append_curl_option(&command, "--header", api_header)
+        }
+    }
+
+    body_text := strings.to_string(request.body.text)
+    resolved_body_text, body_text_changed := resolve_environment_variables(body_text, allocator)
+    defer if body_text_changed {
+        delete(resolved_body_text)
+    }
+    if body_text_changed {
+        body_text = resolved_body_text
+    }
+
+    switch request.body.type {
+    case .None:
+    case .Text:
+        append_curl_option(&command, "--header", "Content-Type: text/plain")
+        append_curl_option(&command, "--data-binary", body_text)
+    case .JSON:
+        append_curl_option(&command, "--header", "Content-Type: application/json")
+        append_curl_option(&command, "--data-binary", body_text)
+    case .XML:
+        append_curl_option(&command, "--header", "Content-Type: text/xml")
+        append_curl_option(&command, "--data-binary", body_text)
+    case .HTML:
+        append_curl_option(&command, "--header", "Content-Type: text/html")
+        append_curl_option(&command, "--data-binary", body_text)
+    case .X_WWW_Form_Urlencoded:
+        append_curl_option(&command, "--header", "Content-Type: application/x-www-form-urlencoded")
+
+        data := strings.builder_make_len_cap(0, 128, allocator)
+        defer strings.builder_destroy(&data)
+
+        should_write_ampersand := false
+        for &field in request.body.structured {
+            if field.disabled {
+                continue
+            }
+
+            field_key := string(cstring(raw_data(field.key[:])))
+            resolved_field_key, field_key_changed := resolve_environment_variables(field_key, allocator)
+            defer if field_key_changed {
+                delete(resolved_field_key)
+            }
+            if field_key_changed {
+                field_key = resolved_field_key
+            }
+
+            field_key = strings.trim_space(field_key)
+            if field_key == "" {
+                continue
+            }
+
+            field_value := string(cstring(raw_data(field.value[:])))
+            resolved_field_value, field_value_changed := resolve_environment_variables(field_value, allocator)
+            defer if field_value_changed {
+                delete(resolved_field_value)
+            }
+            if field_value_changed {
+                field_value = resolved_field_value
+            }
+
+            if should_write_ampersand {
+                strings.write_byte(&data, '&')
+            }
+            should_write_ampersand = true
+
+            encoded_key := percent_encode_query_param_component(field_key, allocator)
+            defer delete(encoded_key)
+            encoded_value := percent_encode_query_param_component(field_value, allocator)
+            defer delete(encoded_value)
+            strings.write_string(&data, encoded_key)
+            strings.write_byte(&data, '=')
+            strings.write_string(&data, encoded_value)
+        }
+
+        append_curl_option(&command, "--data", strings.to_string(data))
+    case .Form:
+        for &field in request.body.structured {
+            if field.disabled {
+                continue
+            }
+
+            field_key := string(cstring(raw_data(field.key[:])))
+            resolved_field_key, field_key_changed := resolve_environment_variables(field_key, allocator)
+            defer if field_key_changed {
+                delete(resolved_field_key)
+            }
+            if field_key_changed {
+                field_key = resolved_field_key
+            }
+
+            field_key = strings.trim_space(field_key)
+            if field_key == "" {
+                continue
+            }
+
+            field_content_type := field.content_type
+            resolved_field_content_type, field_content_type_changed := resolve_environment_variables(field_content_type, allocator)
+            defer if field_content_type_changed {
+                delete(resolved_field_content_type)
+            }
+            if field_content_type_changed {
+                field_content_type = resolved_field_content_type
+            }
+
+            if field.is_file {
+                for file_path in field.file_paths {
+                    if file_path == "" {
+                        continue
+                    }
+
+                    form_value := fmt.aprintf("%s=@%s", field_key, file_path)
+                    if field_content_type != "" {
+                        defer delete(form_value)
+                        form_value = fmt.aprintf("%s;type=%s", form_value, field_content_type)
+                    }
+                    defer delete(form_value)
+                    append_curl_option(&command, "--form", form_value)
+                }
+                continue
+            }
+
+            field_value := string(cstring(raw_data(field.value[:])))
+            resolved_field_value, field_value_changed := resolve_environment_variables(field_value, allocator)
+            defer if field_value_changed {
+                delete(resolved_field_value)
+            }
+            if field_value_changed {
+                field_value = resolved_field_value
+            }
+
+            form_value := fmt.aprintf("%s=%s", field_key, field_value)
+            if field_content_type != "" {
+                defer delete(form_value)
+                form_value = fmt.aprintf("%s;type=%s", form_value, field_content_type)
+                defer delete(form_value)
+                append_curl_option(&command, "--form", form_value)
+            } else {
+                defer delete(form_value)
+                append_curl_option(&command, "--form-string", form_value)
+            }
+        }
+    case .File:
+        if request.body.binary_path != "" {
+            append_curl_option(&command, "--header", "Content-Type: application/octet-stream")
+            binary_file_arg := fmt.aprintf("@%s", request.body.binary_path)
+            defer delete(binary_file_arg)
+            append_curl_option(&command, "--data-binary", binary_file_arg)
+        }
+    }
+
+    append_curl_option(&command, "--url", final_url)
+
+    return strings.to_string(command)
+}
+
 build_final_request_url :: proc(request: ^Request, effective_auth: Authorization, allocator := context.allocator) -> string {
     final_url := strings.builder_make_len_cap(0, 1024, allocator)
 
@@ -7392,9 +7750,14 @@ main :: proc() {
 
     title := fmt.caprintf("Moonladder %s-%s", VERSION if VERSION != "" else "debug", GIT_SHA)
     engine.init("", title, {1000, 600}, false)
-    ensure(engine.ui_text_register_font("res/fonts/RedHatDisplay.ttf"))
-    ensure(engine.ui_text_register_font("res/fonts/icons.ttf"))
-    ensure(engine.ui_text_register_font("/usr/share/fonts/truetype/Tajawal/Tajawal-Regular.ttf"))
+    ok: bool
+    _, default_ok := engine.ui_text_register_font("res/fonts/RedHatDisplay.ttf"); ensure(default_ok)
+    _, icons_ok := engine.ui_text_register_font("res/fonts/icons.ttf"); ensure(icons_ok)
+    _, arabic_ok := engine.ui_text_register_font("/usr/share/fonts/truetype/Tajawal/Tajawal-Regular.ttf"); ensure(arabic_ok)
+    monospace, monospace_ok := engine.ui_text_register_font("res/fonts/RedHatMono.ttf"); ensure(monospace_ok)
+
+    state.monospace_font = monospace
+
     // assert(engine.ui_text_register_font("res/fonts/NotoSansCJK-Regular.ttc"))
     // assert(engine.ui_text_register_font("res/fonts/NotoSansEgyptianHieroglyphs-Regular.ttf"))
     // assert(engine.ui_text_register_font("res/fonts/NotoColorEmoji.ttf"))
@@ -7537,6 +7900,7 @@ main :: proc() {
             draw_environment_rename_dialog()
             draw_environment_delete_dialog()
             draw_environment_move_dialog()
+            draw_curl_command_dialog()
             draw_about_dialog()
             draw_tab_switcher_overlay()
             engine.ui_end_build()

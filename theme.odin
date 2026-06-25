@@ -306,7 +306,7 @@ THEME_TEXT_BRAND_HOVER := [Theme]u32{
 
 THEME_TEXT_SUCCESS_DEFAULT := [Theme]u32{
     .Light = 0x079455,
-    .Dark = 0x067647,
+    .Dark = 0x47CD89,
 }
 
 THEME_TEXT_SUCCESS_HOVER := [Theme]u32{
