@@ -7752,15 +7752,15 @@ main :: proc() {
     title := fmt.caprintf("Moonladder %s-%s", VERSION if VERSION != "" else "debug", GIT_SHA)
     engine.init("", title, {1000, 600}, false)
     ok: bool
+    // TODO: we need a register proc that accepts a bunch of bytes so we can #load the font data directly from the binary instead of shipping font files separately.
     _, default_ok := engine.ui_text_register_font("res/fonts/RedHatDisplay.ttf"); ensure(default_ok)
     _, icons_ok := engine.ui_text_register_font("res/fonts/icons.ttf"); ensure(icons_ok)
-    // _, arabic_ok := engine.ui_text_register_font("/usr/share/fonts/truetype/Tajawal/Tajawal-Regular.ttf"); ensure(arabic_ok)
+    _, arabic_ok := engine.ui_text_register_font("res/fonts/Tajawal-Regular.ttf"); ensure(arabic_ok)
+    _, cjk_ok := engine.ui_text_register_font("res/fonts/NotoSansCJK-Regular.ttc"); ensure(cjk_ok)
     monospace, monospace_ok := engine.ui_text_register_font("res/fonts/RedHatMono.ttf"); ensure(monospace_ok)
 
     state.monospace_font = monospace
 
-    // assert(engine.ui_text_register_font("res/fonts/NotoSansCJK-Regular.ttc"))
-    // assert(engine.ui_text_register_font("res/fonts/NotoSansEgyptianHieroglyphs-Regular.ttf"))
     // assert(engine.ui_text_register_font("res/fonts/NotoColorEmoji.ttf"))
     engine.set_clear_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
     engine.set_msaa(.NONE)
