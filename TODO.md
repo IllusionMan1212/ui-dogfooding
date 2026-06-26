@@ -70,7 +70,7 @@ Claude reviews:
 - Text renderer
     - [ ] Anti-aliasing on the equals glyph is really bad.
     - [ ] Colored emojis are affected by the text color. They should be drawn as-is, without any color modification.
-    - [ ] Should we anti-alias emojis? Seems to me like COLR emojis already have anti-aliasing baked in, so we shouldn't need to do it again. But we should test this.
+    - [ ] Should we anti-alias emojis? Seems to me like CBDT emojis already have anti-aliasing baked in, so we shouldn't need to do it again. But we should test this.
     - [ ] Modifiers in emojis (e.g. skin tone) don't work properly. The modifier is drawn as a separate glyph instead of modifying the base emoji glyph.
     - [ ] We currently rasterize emojis (at runtime) to a 2048x2048 texture atlas and therefore this means that we can only support a limited number of emojis. This texture is never cleared or overwritten, so if we use a lot of emojis then we will eventually run out of space in the texture atlas and therefore some emojis will be drawn as blank space.
         - Currently the emojis seem to be rasterized at 128px. We could try rasterizing them at a smaller size (e.g. 64px) to fit more emojis in the texture atlas. OR rasterize at the requested size.
@@ -83,6 +83,12 @@ Claude reviews:
         - I guess our best bet for bitmap emojis is to rasterize them at the requested size and then cache them in a texture atlas. This way we can support infinite emojis, but we would need to clear the texture atlas when it gets full and re-rasterize the emojis that are currently visible.
 - Font system
     - [x] Need a way to select different (registered) fonts at runtime for different text. I need this for monospace fonts.
+
+Claude mentions a couple of things to consider:-
+- The glyph cache key includes pixel_size (ui_text.odin:1031), so the same glyph re-tessellates and re-uploads per size. Storing curves in size-independent EM space and scaling in the shader would dedupe these — bigger refactor, real follow-up win.
+    - This one seems interesting. But I'm very happy with the VRAM usage reductions we already did. So this is a nice to have but not a priority.
+- The bitmap atlas (RGBA8 2048×2048 + mipmaps ≈ 21 MB, ui_text.odin:2067) for color/emoji glyphs is another VRAM chunk if you want to look there next.
+    - This one I'm not sure about cause we likely need it for emojis (if we wanna use emojis)
 
 - [x] Text input
     - [x] When moving the mouse, sometimes the blinking of the caret takes longer (This is something to do with how we handle events I bet)
