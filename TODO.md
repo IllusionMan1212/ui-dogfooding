@@ -29,6 +29,8 @@ Next on the list:-
 - BUGS:
     - [x] Opening a tab causes the sidebar's scrollbar to be unresponsive to mouse dragging.
     - [ ] Hovering over the sidebar tabs while having a collection/environment open causes the text size to leak to the open tab
+    - [ ] Windows: Changing language with Alt + Shift doesn't seem to work (even when focus is on text input).
+        - Probably a windows API that we have to call to tell the OS hey we're currently focused on a text input
 
 - Tab Switcher:-
     - [ ] Need to limit the number of tabs shown in the tab switcher. 6 or 7

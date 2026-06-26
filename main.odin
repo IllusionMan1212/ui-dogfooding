@@ -1721,8 +1721,9 @@ draw_curl_command_dialog :: proc() {
             engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
             engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
             engine.ui_set_next_border_thickness(0.5)
-            engine.ui_set_next_flags({.DrawBackground, .DrawBorder, .ScrollableY})
+            engine.ui_set_next_flags({.DrawBackground, .DrawBorder, .ScrollableY, .ClipToBounds})
             engine.ui_column(); {
+                // TODO: scrollbar
                 engine.ui_padding(12, {.Left, .Right, .Top, .Bottom})
 
                 engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
@@ -7753,7 +7754,7 @@ main :: proc() {
     ok: bool
     _, default_ok := engine.ui_text_register_font("res/fonts/RedHatDisplay.ttf"); ensure(default_ok)
     _, icons_ok := engine.ui_text_register_font("res/fonts/icons.ttf"); ensure(icons_ok)
-    _, arabic_ok := engine.ui_text_register_font("/usr/share/fonts/truetype/Tajawal/Tajawal-Regular.ttf"); ensure(arabic_ok)
+    // _, arabic_ok := engine.ui_text_register_font("/usr/share/fonts/truetype/Tajawal/Tajawal-Regular.ttf"); ensure(arabic_ok)
     monospace, monospace_ok := engine.ui_text_register_font("res/fonts/RedHatMono.ttf"); ensure(monospace_ok)
 
     state.monospace_font = monospace
