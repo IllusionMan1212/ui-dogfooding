@@ -31,6 +31,18 @@ Next on the list:-
     - [ ] Hovering over the sidebar tabs while having a collection/environment open causes the text size to leak to the open tab
     - [ ] Windows: Changing language with Alt + Shift doesn't seem to work (even when focus is on text input).
         - Probably a windows API that we have to call to tell the OS hey we're currently focused on a text input
+    - [ ] We're able to scroll the sidebar when a dialog is open. That should be fixed.
+
+- [ ] CJK and emoji fonts (at least the noto one) are very big, embedding that into the binary bloats up its size.
+    We could either:-
+    - Not support CJK fonts.
+    - Load all fonts as a resource from the file system
+    - Probe the system for fonts and use those
+    Still haven't decided, but I will likely go with the first option for now, unless there's demand for them in the future.
+
+Pretty good ideas:-
+- [ ] Wrap OpenGL calls in order to track memory usage and associate them with each "object" type (e.g. texture, buffer, etc..). This way we can track memory usage and detect leaks.
+    - Very useful in the future.
 
 - Tab Switcher:-
     - [ ] Need to limit the number of tabs shown in the tab switcher. 6 or 7
@@ -57,7 +69,18 @@ Claude reviews:
 
 - Text renderer
     - [ ] Anti-aliasing on the equals glyph is really bad.
-
+    - [ ] Colored emojis are affected by the text color. They should be drawn as-is, without any color modification.
+    - [ ] Should we anti-alias emojis? Seems to me like COLR emojis already have anti-aliasing baked in, so we shouldn't need to do it again. But we should test this.
+    - [ ] Modifiers in emojis (e.g. skin tone) don't work properly. The modifier is drawn as a separate glyph instead of modifying the base emoji glyph.
+    - [ ] We currently rasterize emojis (at runtime) to a 2048x2048 texture atlas and therefore this means that we can only support a limited number of emojis. This texture is never cleared or overwritten, so if we use a lot of emojis then we will eventually run out of space in the texture atlas and therefore some emojis will be drawn as blank space.
+        - Currently the emojis seem to be rasterized at 128px. We could try rasterizing them at a smaller size (e.g. 64px) to fit more emojis in the texture atlas. OR rasterize at the requested size.
+        Few thoughts:-
+        - If we decided to drop the atlas and somehow draw from vectors (are emojis even stored as vectors in the font?) then we could support infinite emojis AND get rid of the bitmap texture atlas. (Less VRAM)
+        - If the above is not possible, then we would need a way to fit all possible, visible emojis in the texture atlas, which I'm not sure is possible either.
+        - ??? No idea ??
+        - So apparently it depends on the font. Some fonts have emojis as layers of vectors, others store various sized bitmaps (32x32, 64x64, 128x128, etc..).
+            This is annoying. vectors seems like the best way but we should probably support both.
+        - I guess our best bet for bitmap emojis is to rasterize them at the requested size and then cache them in a texture atlas. This way we can support infinite emojis, but we would need to clear the texture atlas when it gets full and re-rasterize the emojis that are currently visible.
 - Font system
     - [x] Need a way to select different (registered) fonts at runtime for different text. I need this for monospace fonts.
 

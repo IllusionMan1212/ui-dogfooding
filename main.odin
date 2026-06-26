@@ -3901,7 +3901,8 @@ draw_ui_debug_overlay :: proc() {
 
         engine.ui_spacer(engine.ui_px(6, 1))
 
-        engine.ui_set_next_font_size(12)
+        engine.ui_push_font_size(THEME_FONT_SIZE_BODY_MD)
+        defer engine.ui_pop_font_size()
         engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_BODY)
         engine.ui_text(fmt.tprintf("Rect Draw Cmds: %d", stats.draw_cmd_count))
         engine.ui_text(fmt.tprintf("Rect Instances: %d", stats.draw_instance_count))
@@ -7752,16 +7753,15 @@ main :: proc() {
     title := fmt.caprintf("Moonladder %s-%s", VERSION if VERSION != "" else "debug", GIT_SHA)
     engine.init("", title, {1000, 600}, false)
     ok: bool
-    // TODO: we need a register proc that accepts a bunch of bytes so we can #load the font data directly from the binary instead of shipping font files separately.
-    _, default_ok := engine.ui_text_register_font("res/fonts/RedHatDisplay.ttf"); ensure(default_ok)
-    _, icons_ok := engine.ui_text_register_font("res/fonts/icons.ttf"); ensure(icons_ok)
-    _, arabic_ok := engine.ui_text_register_font("res/fonts/Tajawal-Regular.ttf"); ensure(arabic_ok)
-    _, cjk_ok := engine.ui_text_register_font("res/fonts/NotoSansCJK-Regular.ttc"); ensure(cjk_ok)
-    monospace, monospace_ok := engine.ui_text_register_font("res/fonts/RedHatMono.ttf"); ensure(monospace_ok)
+    _, default_ok := engine.ui_text_register_font(#load("res/fonts/RedHatDisplay.ttf")); ensure(default_ok)
+    _, icons_ok := engine.ui_text_register_font(#load("res/fonts/icons.ttf")); ensure(icons_ok)
+    _, arabic_ok := engine.ui_text_register_font(#load("res/fonts/Tajawal-Regular.ttf")); ensure(arabic_ok)
+    // _, cjk_ok := engine.ui_text_register_font(#load("res/fonts/NotoSansCJK-Regular.ttc")); ensure(cjk_ok)
+    // _, emoji_ok := engine.ui_text_register_font(#load("res/fonts/NotoColorEmoji.ttf")); ensure(emoji_ok)
+    monospace, monospace_ok := engine.ui_text_register_font(#load("res/fonts/RedHatMono.ttf")); ensure(monospace_ok)
 
     state.monospace_font = monospace
 
-    // assert(engine.ui_text_register_font("res/fonts/NotoColorEmoji.ttf"))
     engine.set_clear_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
     engine.set_msaa(.NONE)
     engine.set_render_on_change(true)
@@ -7855,11 +7855,9 @@ main :: proc() {
             window_size := engine.get_window_size()
 
             engine.ui_begin_build(window_size)
-            engine.ui_text_set_default_pixel_size(16)
             engine.ui_text_set_default_font_weight(THEME_FONT_WEIGHT_BODY)
 
             engine.ui_push_text_color(engine.color_hex_rgb(THEME_TEXT_PRIMARY_DEFAULT[state.config.theme]))
-            defer engine.ui_pop_text_color()
             {
                 engine.ui_set_next_width(engine.ui_fill())
                 engine.ui_set_next_height(engine.ui_fill())
@@ -7904,8 +7902,10 @@ main :: proc() {
             draw_curl_command_dialog()
             draw_about_dialog()
             draw_tab_switcher_overlay()
-            engine.ui_end_build()
 
+            engine.ui_pop_text_color()
+
+            engine.ui_end_build()
             engine.ui_draw(engine.get_projection())
         }
 
