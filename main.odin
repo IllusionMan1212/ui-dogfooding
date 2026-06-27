@@ -61,6 +61,8 @@ WORKSPACE_MOVE_PICKER_ID :: #hash("workspace_move_picker", "fnv32a")
 REQUEST_RENAME_DIALOG_ID :: #hash("rename_request_dialog", "fnv32a")
 REQUEST_RENAME_NAME_INPUT_ID :: #hash("rename_request_name_input", "fnv32a")
 REQUEST_DELETE_DIALOG_ID :: #hash("delete_request_dialog", "fnv32a")
+SAVE_REQUEST_DIALOG_ID :: #hash("save_request_dialog", "fnv32a")
+SAVE_REQUEST_NAME_INPUT_ID :: #hash("save_request_name_input", "fnv32a")
 ENVIRONMENT_CREATE_DIALOG_ID :: #hash("create_environment_dialog", "fnv32a")
 ENVIRONMENT_CREATE_NAME_INPUT_ID :: #hash("create_environment_name_input", "fnv32a")
 ENVIRONMENT_RENAME_DIALOG_ID :: #hash("rename_environment_dialog", "fnv32a")
@@ -501,6 +503,15 @@ State :: struct {
     request_target_collection: ^Collection,
     request_target_id: i64,
     request_name_builder: strings.Builder,
+
+    // Save-to-collection dialog state (Ctrl+S on a standalone request). save_request_target is
+    // the open request tab being saved; save_collection_target is the collection highlighted in
+    // the picker tree. save_picker_expanded tracks per-collection expansion *local to the picker*
+    // (keyed by collection id) so toggling a node here doesn't move the sidebar's tree.
+    save_request_target: ^Request,
+    save_collection_target: ^Collection,
+    save_request_name_builder: strings.Builder,
+    save_picker_expanded: map[i64]bool,
 
     // Environment create/rename/delete/move dialog state
     environment_name_builder: strings.Builder,
@@ -1568,6 +1579,235 @@ draw_request_delete_dialog :: proc() {
                     state.request_target_collection = nil
                 }
                 engine.ui_dialog_close()
+            }
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Save-to-collection dialog (Ctrl+S on a standalone request)
+// ---------------------------------------------------------------------------
+
+open_save_request_dialog :: proc(request: ^Request) {
+    state.save_request_target = request
+    state.save_collection_target = nil
+    strings.builder_reset(&state.save_request_name_builder)
+    strings.write_string(&state.save_request_name_builder, request.name)
+    // Start every node collapsed; the picker's expansion is tracked independently of the sidebar.
+    if state.save_picker_expanded == nil {
+        state.save_picker_expanded = make(map[i64]bool)
+    } else {
+        clear(&state.save_picker_expanded)
+    }
+    engine.ui_dialog_open(SAVE_REQUEST_DIALOG_ID)
+    engine.ui_focus_text_input(SAVE_REQUEST_NAME_INPUT_ID)
+    engine.ui_text_input_select_all(SAVE_REQUEST_NAME_INPUT_ID)
+}
+
+// Commits the save dialog: attaches the target request to the highlighted collection under the
+// name in the text field, then closes the dialog. No-op (keeps the dialog open) when either is
+// missing.
+commit_save_request_dialog :: proc() {
+    name := strings.trim_space(strings.to_string(state.save_request_name_builder))
+    if state.save_request_target == nil || state.save_collection_target == nil || name == "" {
+        return
+    }
+
+    add_request_to_collection(state.save_request_target, state.save_collection_target, name)
+    state.save_request_target = nil
+    state.save_collection_target = nil
+    engine.ui_dialog_close()
+}
+
+// Recursively renders one collection (selectable) and, when expanded, its sub-collections and
+// requests. Requests are shown disabled — only collections can be picked as a save destination.
+draw_save_picker_item :: proc(collection: ^Collection, indent_level := 0) {
+    selected := state.save_collection_target == collection
+    expanded := state.save_picker_expanded[collection.id]
+
+    // The row is wrapped in its own block so it pops (via @(deferred_none=pop_parent)) before the
+    // recursive children below become siblings in the enclosing scroll column rather than nesting
+    // inside this row.
+    {
+        engine.ui_set_next_align_x(.Start)
+        engine.ui_set_next_align_y(.Center)
+        engine.ui_set_next_flags({.DrawBackground, .MouseClickable})
+        engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+
+        box := engine.ui_row(engine.ui_make_id(fmt.tprintf("save_picker_collection_%d", collection.id)))
+        sig := engine.ui_signal_from_box(box); {
+            if selected {
+                box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme])
+            } else if engine.ui_hovering(sig) {
+                engine.set_cursor(.HAND)
+                box.background_color = engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT_HOVER[state.config.theme])
+            } else {
+                box.background_color = TRANSPARENT
+            }
+
+            engine.ui_padding(6, {.Left})
+            engine.ui_padding(12, {.Right})
+            engine.ui_padding(4, {.Top, .Bottom})
+
+            text_color := selected || engine.ui_hovering(sig) ? THEME_TEXT_PRIMARY_DEFAULT[state.config.theme] : THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]
+            engine.ui_push_text_color(engine.color_hex_rgb(text_color))
+
+            engine.ui_spacer(engine.ui_px(f32(20 * indent_level), 1))
+
+            {
+                engine.ui_set_next_width(engine.ui_fill())
+                engine.ui_set_next_height(engine.ui_children_sum(1))
+                engine.ui_set_next_align_y(.Center)
+                engine.ui_row(); {
+                    engine.ui_set_next_rotation(expanded ? 0 : math.to_radians_f32(-90))
+                    engine.ui_text_sized(ICONS[.Chevron], 12)
+
+                    engine.ui_spacer(engine.ui_px(4, 1))
+
+                    engine.ui_set_next_font_size(14)
+                    engine.ui_text_shrinkable(collection.name)
+
+                    engine.ui_pop_text_color()
+                }
+            }
+        }
+
+        // Match moonladder: a click both selects the collection and toggles its expansion. The
+        // expansion is local to the picker (see save_picker_expanded) so the sidebar is unaffected.
+        if engine.ui_clicked(sig) {
+            state.save_collection_target = collection
+            state.save_picker_expanded[collection.id] = !expanded
+        }
+    }
+
+    if expanded {
+        for child := collection.first; child != nil; child = child.next {
+            draw_save_picker_item(child, indent_level + 1)
+        }
+        for &request in collection.requests {
+            draw_save_picker_request(&request, indent_level + 1)
+        }
+    }
+}
+
+// Display-only request row inside the save picker. Requests cannot be selected as a destination.
+draw_save_picker_request :: proc(request: ^Request, indent_level := 0) {
+    engine.ui_set_next_align_x(.Start)
+    engine.ui_set_next_align_y(.Center)
+    engine.ui_set_next_width(engine.ui_fill())
+    engine.ui_set_next_height(engine.ui_children_sum(1))
+    engine.ui_row(); {
+        engine.ui_padding(6, {.Left})
+        engine.ui_padding(12, {.Right})
+        engine.ui_padding(4, {.Top, .Bottom})
+
+        engine.ui_spacer(engine.ui_px(f32(20 * indent_level), 1))
+
+        // Wrapped so the method row pops before the name text becomes its sibling.
+        {
+            engine.ui_set_next_width(engine.ui_px(28, 1))
+            engine.ui_set_next_max_width(28)
+            engine.ui_set_next_height(engine.ui_children_sum(1))
+            engine.ui_row(); {
+                engine.ui_spacer(engine.ui_fill())
+                engine.ui_set_next_font_weight(THEME_FONT_WEIGHT_HEADING)
+                engine.ui_set_next_font_size(10)
+                method_color := http_method_color(request.method)
+                method_color.a *= 0.6
+                engine.ui_set_next_text_color(method_color)
+                engine.ui_text(http_method_string(request.method))
+            }
+        }
+
+        engine.ui_spacer(engine.ui_px(8, 1))
+
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_font_size(14)
+        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+        engine.ui_text_shrinkable(request.name)
+    }
+}
+
+draw_save_request_dialog :: proc() {
+    draw_dialog(SAVE_REQUEST_DIALOG_ID, 400, draw_content = proc() {
+        engine.ui_text_sized("Save to Collection", THEME_FONT_SIZE_BODY_LG)
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_XS, 1))
+        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_TERTIARY_DEFAULT[state.config.theme]))
+        engine.ui_set_next_font_size(THEME_FONT_SIZE_BODY_SM)
+        engine.ui_text("Select a collection to save your request to")
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+        engine.ui_set_next_width(engine.ui_fill())
+        result := draw_text_input(SAVE_REQUEST_NAME_INPUT_ID, &state.save_request_name_builder, .Medium, engine.TextInputOptions{placeholder = "Request name", max_length = 64})
+        if result.submitted {
+            commit_save_request_dialog()
+        }
+
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+        // Bounded, scrollable collection tree. Wrapped in its own block so the container row pops
+        // before the buttons below (see @(deferred_none=pop_parent) on ui_row/ui_column).
+        {
+            engine.ui_set_next_flags({.DrawBackground, .DrawBorder})
+            engine.ui_set_next_background_color(engine.color_hex_rgb(THEME_BACKGROUND_SECONDARY_DEFAULT[state.config.theme]))
+            engine.ui_set_next_border_color(engine.color_hex_rgb(THEME_BORDER_PRIMARY_DEFAULT[state.config.theme]))
+            engine.ui_set_next_border_thickness(1)
+            engine.ui_set_next_border_radius(THEME_BORDER_RADIUS_MD)
+            engine.ui_set_next_width(engine.ui_fill())
+            engine.ui_set_next_height(engine.ui_px(280, 1))
+            engine.ui_row(); {
+                engine.ui_padding(THEME_SPACING_SM, {.Top, .Bottom, .Left, .Right})
+
+                collections := state.workspaces[state.active_workspace_index].collections
+                if len(collections) == 0 {
+                    engine.ui_set_next_width(engine.ui_fill())
+                    engine.ui_set_next_height(engine.ui_fill())
+                    engine.ui_set_next_align_x(.Center)
+                    engine.ui_set_next_align_y(.Center)
+                    engine.ui_column(); {
+                        engine.ui_set_next_text_color(engine.color_hex_rgb(THEME_TEXT_SECONDARY_DEFAULT[state.config.theme]))
+                        engine.ui_text("No collections yet")
+                    }
+                } else {
+                    scroll_box: ^engine.Box
+                    // The scroll column is wrapped so it pops before the scrollbar becomes its sibling.
+                    {
+                        engine.ui_set_next_width(engine.ui_fill())
+                        engine.ui_set_next_height(engine.ui_fill())
+                        scroll_box = engine.ui_scroll_column(); {
+                            for collection, i in collections {
+                                if i != 0 {
+                                    engine.ui_spacer(engine.ui_px(THEME_SPACING_2XS, 1))
+                                }
+                                draw_save_picker_item(collection)
+                            }
+                        }
+                    }
+                    engine.ui_spacer(engine.ui_px(4, 1))
+                    SCROLLBAR_V(scroll_box, engine.ui_make_id("save_picker_scrollbar"))
+                }
+            }
+        }
+
+        engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+
+        name := strings.trim_space(strings.to_string(state.save_request_name_builder))
+        engine.ui_set_next_width(engine.ui_fill())
+        engine.ui_set_next_height(engine.ui_children_sum(1))
+        engine.ui_set_next_align_y(.Center)
+        engine.ui_row(); {
+            engine.ui_set_next_width(engine.ui_fill())
+            if draw_button("Cancel", variant = .SecondaryColored, size = .Small) {
+                state.save_request_target = nil
+                state.save_collection_target = nil
+                engine.ui_dialog_close()
+            }
+            engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
+            engine.ui_set_next_width(engine.ui_fill())
+            if draw_button("Save", enabled = state.save_collection_target != nil && name != "", size = .Small) {
+                commit_save_request_dialog()
             }
         }
     })
@@ -4533,6 +4773,8 @@ cleanup :: proc() {
     strings.builder_destroy(&state.workspace_name_builder)
     strings.builder_destroy(&state.collection_name_builder)
     strings.builder_destroy(&state.request_name_builder)
+    strings.builder_destroy(&state.save_request_name_builder)
+    delete(state.save_picker_expanded)
     strings.builder_destroy(&state.environment_name_builder)
 }
 
@@ -7232,6 +7474,74 @@ delete_collection_request :: proc(collection: ^Collection, request_id: i64) {
     save_workspaces()
 }
 
+// Ctrl+S entry point: saves the active tab if it's a modified request. Requests that already
+// belong to a collection are written back in place; standalone requests open the save-to-collection
+// dialog so the user can pick a destination. Mirrors moonladder's save_request_tab flow.
+save_active_request_tab :: proc() {
+    if state.active_tab_index < 0 || state.active_tab_index >= len(state.tabs) {
+        return
+    }
+
+    request, is_request := state.tabs[state.active_tab_index].(^Request)
+    if !is_request || !request.is_modified {
+        return
+    }
+
+    if request.collection == nil {
+        open_save_request_dialog(request)
+        return
+    }
+
+    save_request_to_collection(request)
+}
+
+// Writes the open request tab back into its owning collection, matching by id, and clears the
+// unsaved flag. The collection request is a private deep copy (same ownership model as
+// create_collection_request).
+save_request_to_collection :: proc(request: ^Request) {
+    col_req, _ := find_collection_request(request.collection, request.id)
+    if col_req == nil {
+        return
+    }
+
+    request.modification_hash = hash_request(request)
+    request.is_modified = false
+
+    copy_request_data(col_req, request)
+    col_req.id = request.id
+    col_req.collection = request.collection
+
+    save_workspaces()
+}
+
+// Attaches a previously standalone request to the chosen collection under the given name, then
+// clears its unsaved flag. Mirrors moonladder's add_request_to_collection.
+add_request_to_collection :: proc(request: ^Request, collection: ^Collection, name: string) {
+    trimmed := strings.trim_space(name)
+    if trimmed == "" {
+        return
+    }
+
+    // Update the open tab to reflect its new name and collection before hashing, since the name
+    // is part of the modification hash.
+    delete(request.name)
+    request.name = strings.clone(trimmed)
+    request.collection = collection
+    request.modification_hash = hash_request(request)
+    request.is_modified = false
+
+    collection_request := Request{}
+    collection_request.body.text = strings.builder_make_len_cap(0, 0)
+    copy_request_data(&collection_request, request)
+    collection_request.id = request.id
+    collection_request.collection = collection
+
+    append(&collection.requests, collection_request)
+    collection.is_expanded = true
+
+    save_workspaces()
+}
+
 create_collection_request :: proc(collection: ^Collection) {
     new_request_tab()
 
@@ -7817,6 +8127,11 @@ main :: proc() {
                         }
                     }
                 }
+                if e.key.scancode == .S {
+                    if .LEFT_CTRL in e.key.mods || .RIGHT_CTRL in e.key.mods {
+                        save_active_request_tab()
+                    }
+                }
                 if e.key.scancode == .TAB && !e.key.is_repeat {
                     if .LEFT_CTRL in e.key.mods || .RIGHT_CTRL in e.key.mods {
                         backward := .LEFT_SHIFT in e.key.mods || .RIGHT_SHIFT in e.key.mods
@@ -7894,6 +8209,7 @@ main :: proc() {
             draw_collection_move_dialog()
             draw_request_rename_dialog()
             draw_request_delete_dialog()
+            draw_save_request_dialog()
             draw_tab_rename_dialog()
             draw_environment_create_dialog()
             draw_environment_rename_dialog()
