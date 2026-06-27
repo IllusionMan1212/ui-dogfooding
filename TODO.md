@@ -40,6 +40,8 @@ Next on the list:-
     - Probe the system for fonts and use those
     Still haven't decided, but I will likely go with the first option for now, unless there's demand for them in the future.
 
+- [ ] Closing unsaved tabs should prompt a dialog to save them
+
 Pretty good ideas:-
 - [ ] Wrap OpenGL calls in order to track memory usage and associate them with each "object" type (e.g. texture, buffer, etc..). This way we can track memory usage and detect leaks.
     - Very useful in the future.
