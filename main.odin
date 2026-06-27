@@ -2277,7 +2277,7 @@ draw_collections_list :: proc() {
 
                 engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
 
-                width := engine.ui_text_measure_string("New Collection").x + THEME_SPACING_MD
+                width := engine.ui_text_measure_string("New Collection").x + (THEME_SPACING_MD * 2)
 
                 engine.ui_set_next_width(engine.ui_px(width, 1))
                 if draw_button("New Collection", variant = .Primary) {
@@ -2643,7 +2643,7 @@ draw_environments_list :: proc() {
 
                 engine.ui_spacer(engine.ui_px(THEME_SPACING_MD, 1))
 
-                width := engine.ui_text_measure_string("New Environment").x + THEME_SPACING_MD
+                width := engine.ui_text_measure_string("New Environment").x + (THEME_SPACING_MD * 2)
 
                 engine.ui_set_next_width(engine.ui_px(width, 1))
                 if draw_button("New Environment", variant = .Primary) {
